@@ -1,0 +1,61 @@
+# ==============================================================================
+# Git Ignore Configuration - PERVOL / X-BLAST Enterprise
+# ==============================================================================
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# Virtual Environments (Nunca deben subirse a Git)
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Linting
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# IDEs & Editor Configuration
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Windows Shortcuts & Local Specifics
+*.lnk
+
+# Application Logs & Caches
+*.log
+VOLADURA_PRO_10X/logs/*
+!VOLADURA_PRO_10X/logs/.gitkeep
+pyvista_cache/
+
+# Generated Reports & Output Files (Mantener carpetas pero ignorar outputs generados)
+reports_output/*
+!reports_output/.gitkeep
+VOLADURA_PRO_10X/reports_output/*
+!VOLADURA_PRO_10X/reports_output/.gitkeep
+VOLADURA_PRO_10X/test_reports/*
+!VOLADURA_PRO_10X/test_reports/.gitkeep

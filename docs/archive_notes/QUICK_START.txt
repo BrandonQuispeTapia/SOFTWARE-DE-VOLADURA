@@ -1,0 +1,256 @@
+🚀 VOLADURA_PRO_10X v1.2 — QUICK START GUIDE
+
+═══════════════════════════════════════════════════════════════════════════
+
+1️⃣ INICIAR PROGRAMA
+──────────────────
+
+Opción A (Terminal):
+$ cd "e:\2026-1\datos\PROYECTO PERVOL\VOLADURA_PRO_10X"
+$ python main.py
+
+Opción B (PowerShell):
+PS> cd 'e:\2026-1\datos\PROYECTO PERVOL\VOLADURA_PRO_10X'
+PS> python main.py
+
+⏱️ Esperar: 3-5 segundos (carga de librerías Qt)
+✅ Resultado: Ventana con 4 pestañas + Visor 3D
+
+═══════════════════════════════════════════════════════════════════════════
+
+2️⃣ FLUJO TÍPICO (5 MINUTOS)
+───────────────────────────
+
+PESTAÑA 1: MALLA
+├─ Los valores por defecto ya están listos
+├─ O modificar si lo deseas:
+│  ├─ Burden: 4.5 m
+│  ├─ Spacing: 5.0 m
+│  ├─ Diámetro: 102 mm
+│  ├─ Altura: 12 m
+│  └─ Etc.
+└─ Click: "Calcular Malla" ✓
+
+🎬 → Aparece malla 3D con ~40 taladros
+
+PESTAÑA 2: CEBADO Y CARGA
+├─ Explosivo Columna: ANFO Pesado (por defecto)
+├─ Cebo: Dinamita 100g (por defecto)
+├─ Posición: Fondo Taladro (por defecto)
+└─ Click: "Validar Configuración" ✓
+
+✅ → Se confirma configuración
+
+PESTAÑA 3: SECUENCIA
+├─ Retardos: Por defecto ya configurados
+│  ├─ Superficie: MS 42ms
+│  ├─ Fondo: NONEL 17ms
+│  └─ Intervalo: 25ms
+└─ Click: "Análisis de Tiros Cortados" (opcional) ✓
+
+📊 → Se muestra riesgo: 🟢 BAJO (0.0015%)
+
+PESTAÑA 4: RESULTADOS
+└─ Click: "▶ Simular Voladura" ✓
+
+🎬 → ¡INICIA LA ANIMACIÓN 3D!
+
+   OBSERVAR:
+   ├─ Taladro 0 se pone 🟡 AMARILLO (detonando)
+   ├─ Se desplaza escombrera (nube amarilla)
+   ├─ Taladro 0 se transparenta ⚫
+   ├─ Taladro 1 se pone 🟡 AMARILLO
+   ├─ [...]
+   ├─ Continúa secuencia de todos los taladros
+   └─ ✅ Animación termina (~1100ms)
+
+═══════════════════════════════════════════════════════════════════════════
+
+3️⃣ CONTROLES 3D (Visor PyVista)
+──────────────────────────────
+
+Interacción:
+├─ 🖱️ Rueda Ratón: ZOOM in/out
+├─ 🖱️ Clic+Arrastrar: ROTACIÓN
+├─ 🖱️ Botón Central+Arrastrar: PAN
+└─ 🔑 Click Derecho: Menú PyVista
+
+Teclas:
+├─ R: Reset vista
+├─ F: Fit a pantalla
+└─ Q: Quit (cierra visor)
+
+═══════════════════════════════════════════════════════════════════════════
+
+4️⃣ SIMULACIÓN VISUAL EXPLICADA
+───────────────────────────────
+
+Lo que ves:
+┌─────────────────────────────────────┐
+│  VISOR 3D                           │
+│                                     │
+│  [Cilindros ROJO/GRIS]             │
+│  └─ Representan taladros           │
+│     ├─ GRIS arriba = Taco          │
+│     └─ ROJO abajo = Carga          │
+│                                     │
+│  [Plano azul/transparente]         │
+│  └─ Cara libre (superficie)        │
+│                                     │
+│  [Nube de puntos AMARILLA]         │
+│  └─ Escombrera (Muckpile)          │
+│                                     │
+│  [Ejes X/Y/Z en esquina]           │
+│  └─ Referencia de coordenadas      │
+└─────────────────────────────────────┘
+
+ANIMACIÓN PASO A PASO:
+├─ t=0ms:    Todos VERDE (standby)
+├─ t=25ms:   Taladro 0 → AMARILLO (fuego)
+├─ t=50ms:   Taladro 0 → Transparente + Taladro 1 → AMARILLO
+├─ t=75ms:   Taladro 1 → Transparente + Taladro 2 → AMARILLO
+├─ [continúa...]
+└─ t=1100ms: Fin (todos vacios)
+
+DURACIÓN: ~1.1 segundos (30 FPS)
+
+═══════════════════════════════════════════════════════════════════════════
+
+5️⃣ EJEMPLOS DE AJUSTES
+────────────────────
+
+Para malla MÁS ABIERTA:
+├─ Burden: 6.0 m ↑
+└─ Spacing: 6.5 m ↑
+
+Para malla MÁS CERRADA:
+├─ Burden: 3.5 m ↓
+└─ Spacing: 4.0 m ↓
+
+Para más energía explosiva:
+├─ Diámetro: 127 mm ↑ (de 102)
+└─ Longitud Columna: 10 m ↑ (de 8)
+
+Para menor vibración:
+├─ Retardo Superficie: MS 67ms ↑
+└─ Intervalo Taladros: 42 ms ↑
+
+═══════════════════════════════════════════════════════════════════════════
+
+6️⃣ MENSAJES CLAVE
+─────────────────
+
+✅ "✓ Malla renderizada: 40 taladros"
+   → Éxito: malla visible en 3D
+
+✅ "✓ Configuración Válida"
+   → Éxito: parámetros de carga aceptados
+
+✅ "Riesgo: 🟢 BAJO (0.0015%)"
+   → Bajo riesgo de tiros cortados
+
+✅ "▶ Animación de voladura iniciada"
+   → La simulación comenzó
+
+✅ "✓ Animación completada"
+   → La simulación terminó (éxito)
+
+❌ "Taco mayor que altura de banco"
+   → Error: Reducir longitud de taco
+
+═══════════════════════════════════════════════════════════════════════════
+
+7️⃣ CONFIGURACIÓN AVANZADA
+──────────────────────────
+
+Archivo: config.py
+
+Personalizar:
+├─ ANIMATION_FPS = 30          (Cambiar frame rate)
+├─ THEME_COLORS = {...}       (Cambiar colores)
+├─ DEFAULT_GRID_PARAMS = {...} (Valores por defecto)
+└─ EXPLOSIVES_DATABASE = {...} (Base de datos)
+
+Ejemplo: Cambiar a 60 FPS
+ANIMATION_FPS = 60  # En lugar de 30
+
+═══════════════════════════════════════════════════════════════════════════
+
+8️⃣ TROUBLESHOOTING
+──────────────────
+
+Problema: "ModuleNotFoundError: No module named 'pyvista'"
+
+Solución:
+$ pip install --upgrade pyvista PyVistaQt PySide6
+
+Problema: La GUI se congela
+
+Solución:
+→ Normal en primera carga (compilación Qt)
+→ Espere 5-10 segundos
+→ Si persiste: Reinicie el programa
+
+Problema: No se ve la malla 3D
+
+Solución:
+→ Asegúrese de hacer click en "Calcular Malla" primero
+→ Espere a que renderice (puede tardar 2-3s con 40 taladros)
+
+Problema: La animación es lenta
+
+Solución:
+→ Reducir número de taladros (modificar GRID_ROWS/COLS en config.py)
+→ O aumentar FPS (ANIMATION_FPS en config.py)
+
+═══════════════════════════════════════════════════════════════════════════
+
+9️⃣ ARCHIVOS IMPORTANTES
+───────────────────────
+
+main.py
+└─ Programa principal (inicie esto)
+
+gui/tabbed_panels.py
+└─ Interfaces de pestañas
+
+gui/blast_animator.py
+└─ Motor de animación 3D
+
+config.py
+└─ Configuración centralizada
+
+core/explosives.py
+└─ Base de datos de explosivos
+
+═══════════════════════════════════════════════════════════════════════════
+
+🔟 PRÓXIMAS FASES
+────────────────
+
+Fase 3: PDF Generator
+├─ Click "📄 Exportar PDF"
+├─ Se generará archivo "Reporte_Voladura.pdf"
+├─ Con tabla de parámetros
+├─ Con tabla de resultados
+└─ Con firma legal
+
+Fase 4: Análisis Avanzado
+├─ Gráficos de vibración
+├─ Exportación de video
+├─ Integración con datos MWD
+└─ Historial de simulaciones
+
+═══════════════════════════════════════════════════════════════════════════
+
+APOYO TÉCNICO
+
+Para errores: Revisar consola de Python
+Para características: Consulte README_MEJORAS.md
+Para arquitectura: Consulte ESTRUCTURA_FINAL.md
+
+═══════════════════════════════════════════════════════════════════════════
+
+¡LISTO! Diviértase con la simulación de voladura. 🚀
+
+Tech Lead PERVOL — Mayo 2026
