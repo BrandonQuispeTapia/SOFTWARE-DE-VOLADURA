@@ -1,35 +1,29 @@
 # ==============================================================================
-# Git Ignore Configuration - PERVOL / X-BLAST Enterprise
+# X-BLAST — Git ignore
 # ==============================================================================
 
-# Python Bytecode & Cache
+# Bytecode y cache de Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
 *.egg
 *.egg-info/
-dist/
 build/
-eggs/
-.eggs/
+dist/
 
-# Virtual Environments (Nunca deben subirse a Git)
-.venv/
+# Entornos virtuales
 venv/
+.venv/
 env/
 ENV/
-env.bak/
-venv.bak/
 
-# Testing & Linting
+# Pruebas y cobertura
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
-.nox/
 
-# IDEs & Editor Configuration
+# Editores e IDE
 .vs/
 .vscode/
 .idea/
@@ -37,25 +31,20 @@ htmlcov/
 *.swo
 *~
 
-# Operating System Files
+# Sistema operativo
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 .DS_Store
-
-# Windows Shortcuts & Local Specifics
 *.lnk
 
-# Application Logs & Caches
-*.log
-VOLADURA_PRO_10X/logs/*
-!VOLADURA_PRO_10X/logs/.gitkeep
+# Cache de PyVista y registros
 pyvista_cache/
+*.log
 
-# Generated Reports & Output Files (Mantener carpetas pero ignorar outputs generados)
+# Salidas generadas (se conserva la carpeta, no su contenido)
 reports_output/*
 !reports_output/.gitkeep
-VOLADURA_PRO_10X/reports_output/*
-!VOLADURA_PRO_10X/reports_output/.gitkeep
-VOLADURA_PRO_10X/test_reports/*
-!VOLADURA_PRO_10X/test_reports/.gitkeep
+
+# Proyectos y exportaciones locales
+*.xbp

@@ -1,1 +1,0 @@
-"""Reports generation module."""

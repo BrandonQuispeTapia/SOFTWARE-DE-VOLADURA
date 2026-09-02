@@ -8,48 +8,32 @@ on:
 
 jobs:
   test:
+    name: Pruebas del motor (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Instalar Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
-      - name: Install system deps (WeasyPrint)
-        run: sudo apt-get update && sudo apt-get install -y libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info
-
-      - name: Install dependencies
+      - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install fpdf2 pytest
+          pip install numpy scipy matplotlib pytest
 
-      - name: Lint with ruff
-        run: |
-          pip install ruff
-          ruff check VOLADURA_PRO_10X/ --ignore=E402,F401,F811 --line-length=120 || true
+      - name: Ejecutar la suite
+        # El motor no depende de la interfaz grafica: se prueba sin servidor X.
+        env:
+          MPLBACKEND: Agg
+        run: pytest tests -q
 
-      - name: Test Phase 1
-        working-directory: VOLADURA_PRO_10X
-        run: python test_phase1.py
-
-      - name: Test Phase 2 Physics
-        working-directory: VOLADURA_PRO_10X
-        run: python test_phase2_physics.py
-
-      - name: Test Reports
-        working-directory: VOLADURA_PRO_10X
-        run: python test_phase4_reports.py
-
-      - name: Install PyVista (headless)
-        run: pip install pyvista pyvistaqt
-
-      - name: Test advanced physics
-        working-directory: VOLADURA_PRO_10X
-        run: python test_advanced_physics.py
+      - name: Verificar que la aplicacion compila
+        run: python -m compileall -q xblast
