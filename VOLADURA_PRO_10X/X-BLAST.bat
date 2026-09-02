@@ -12,10 +12,10 @@ echo.
 set "PY_EXE="
 
 :: 1. Buscar en entornos virtuales locales o de la raiz
-if exist "venv\Scripts\python.exe" set "PY_EXE=venv\Scripts\python.exe"
-if not defined PY_EXE if exist ".venv\Scripts\python.exe" set "PY_EXE=.venv\Scripts\python.exe"
-if not defined PY_EXE if exist "..\venv\Scripts\python.exe" set "PY_EXE=..\venv\Scripts\python.exe"
-if not defined PY_EXE if exist "..\.venv\Scripts\python.exe" set "PY_EXE=..\.venv\Scripts\python.exe"
+if exist "%~dp0venv\Scripts\python.exe" set "PY_EXE=%~dp0venv\Scripts\python.exe"
+if not defined PY_EXE if exist "%~dp0.venv\Scripts\python.exe" set "PY_EXE=%~dp0.venv\Scripts\python.exe"
+if not defined PY_EXE if exist "%~dp0..\venv\Scripts\python.exe" set "PY_EXE=%~dp0..\venv\Scripts\python.exe"
+if not defined PY_EXE if exist "%~dp0..\.venv\Scripts\python.exe" set "PY_EXE=%~dp0..\.venv\Scripts\python.exe"
 
 :: 2. Buscar en Python global
 if not defined PY_EXE (
