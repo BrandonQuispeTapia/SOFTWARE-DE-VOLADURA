@@ -1,14 +1,19 @@
-"""Tema visual claro de X-BLAST.
+"""Tema visual de X-BLAST.
 
 Un solo lugar define color, tipografia y espaciado. La hoja de estilo sigue la
 linea de las suites tecnicas de escritorio (QGIS, ArcGIS Pro): fondo claro,
-superficies blancas, bordes de 1 px, acento azul reservado para la accion
-primaria y color semantico solo donde comunica estado.
+superficies blancas, bordes de 1 px, acento reservado para la accion primaria
+y color semantico solo donde comunica estado.
+
+La paleta ``C``, la lista ``SERIES`` y las metricas tipograficas son mutables:
+:func:`apply_settings` las reescribe en sitio con lo que el usuario haya
+elegido en Preferencias, de modo que los modulos que hicieron
+``from .theme import C`` ven el cambio sin reimportar.
 """
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Tuple
 
 # ---------------------------------------------------------------------------
 # Paleta
@@ -58,6 +63,145 @@ FONT_SIZE = 9
 FONT_SIZE_SMALL = 8
 FONT_SIZE_TITLE = 11
 
+#: Metricas de forma y densidad, reescritas por :func:`apply_settings`.
+METRICS: Dict[str, int] = {
+    "radius": 5,
+    "pad_v": 5,       # relleno vertical de campos y botones
+    "pad_h": 8,
+    "row_height": 24,
+    "spacing": 7,
+}
+
+#: Densidades disponibles: relleno vertical, alto de fila y espaciado.
+DENSITIES: Dict[str, Tuple[int, int, int]] = {
+    "Compacta": (3, 21, 5),
+    "Normal": (5, 24, 7),
+    "Amplia": (8, 30, 11),
+}
+
+#: Paletas base. El usuario puede retocar cualquier color por separado.
+PRESETS: Dict[str, Dict[str, str]] = {
+    "Claro": {
+        "accent": "#1668b3", "accent_soft": "#e8f1fa", "surface": "#ffffff",
+        "app": "#f4f6f8", "border": "#d8dee4", "text": "#1f2733",
+        "text_soft": "#5a6673",
+    },
+    "Claro cálido": {
+        "accent": "#b06818", "accent_soft": "#fbf1e6", "surface": "#fffdfa",
+        "app": "#f7f4ef", "border": "#e2dbd0", "text": "#2b2620",
+        "text_soft": "#6b6156",
+    },
+    "Gris técnico": {
+        "accent": "#3f6b8a", "accent_soft": "#eaf0f4", "surface": "#fbfcfd",
+        "app": "#eef1f3", "border": "#d2d8dd", "text": "#22282e",
+        "text_soft": "#5c666f",
+    },
+    "Alto contraste": {
+        "accent": "#0b4f9c", "accent_soft": "#dce9f7", "surface": "#ffffff",
+        "app": "#ffffff", "border": "#4a5560", "text": "#000000",
+        "text_soft": "#2c3540",
+    },
+}
+
+#: Claves de preferencias que alimentan la paleta.
+_COLOR_KEYS = {
+    "appearance.accent": "accent",
+    "appearance.accent_soft": "accent_soft",
+    "appearance.surface": "surface",
+    "appearance.app_background": "app",
+    "appearance.border": "border",
+    "appearance.text": "text",
+    "appearance.text_soft": "text_soft",
+    "appearance.ok": "ok",
+    "appearance.warn": "warn",
+    "appearance.error": "error",
+    "appearance.info": "info",
+}
+
+
+def preset_values(name: str) -> Dict[str, str]:
+    """Colores de una paleta base, con las claves de Preferencias."""
+    base = PRESETS.get(name) or PRESETS["Claro"]
+    inverse = {v: k for k, v in _COLOR_KEYS.items()}
+    return {inverse[k]: v for k, v in base.items() if k in inverse}
+
+
+def apply_settings(store) -> None:
+    """Reescribe la paleta y las metricas con las preferencias del usuario.
+
+    Se muta en sitio para que los modulos que importaron ``C``, ``SERIES`` o
+    ``METRICS`` vean los valores nuevos sin volver a importar.
+    """
+    global FONT_FAMILY, FONT_MONO, FONT_SIZE, FONT_SIZE_SMALL, FONT_SIZE_TITLE
+
+    for key, slot in _COLOR_KEYS.items():
+        C[slot] = str(store.get(key, C[slot]))
+
+    # Tonos derivados, para que un acento nuevo arrastre sus variantes.
+    C["accent_hover"] = _shift(C["accent"], 22)
+    C["accent_press"] = _shift(C["accent"], -26)
+    C["border_strong"] = _shift(C["border"], -22)
+    C["divider"] = _shift(C["border"], 14)
+    C["surface_alt"] = _mix(C["surface"], C["app"], 0.55)
+    C["sunken"] = _mix(C["surface"], C["app"], 0.85)
+    C["text_muted"] = _mix(C["text_soft"], C["surface"], 0.42)
+    C["ok_soft"] = _mix(C["ok"], C["surface"], 0.88)
+    C["warn_soft"] = _mix(C["warn"], C["surface"], 0.88)
+    C["error_soft"] = _mix(C["error"], C["surface"], 0.88)
+    C["info_soft"] = _mix(C["info"], C["surface"], 0.88)
+    C["viewport"] = str(store.get("viewer.background_bottom", C["viewport"]))
+    C["grid"] = str(store.get("viewer.grid_color", C["grid"]))
+
+    SERIES[:] = [str(store.get(f"charts.series_{i}", SERIES[i])) for i in range(8)]
+
+    FONT_FAMILY = str(store.get("appearance.font_family", FONT_FAMILY))
+    FONT_MONO = str(store.get("appearance.font_mono", FONT_MONO))
+    FONT_SIZE = int(store.get("appearance.font_size", FONT_SIZE))
+    FONT_SIZE_SMALL = int(store.get("appearance.font_size_small", FONT_SIZE_SMALL))
+    FONT_SIZE_TITLE = FONT_SIZE + 2
+
+    pad_v, row_h, spacing = DENSITIES.get(
+        str(store.get("appearance.density", "Normal")), DENSITIES["Normal"])
+    METRICS.update({
+        "radius": int(store.get("appearance.radius", 5)),
+        "pad_v": pad_v,
+        "pad_h": 8 if spacing < 11 else 11,
+        "row_height": row_h,
+        "spacing": spacing,
+    })
+
+
+def _clamp(v: float) -> int:
+    return max(0, min(255, int(round(v))))
+
+
+def _rgb(color: str) -> Tuple[int, int, int]:
+    c = color.lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    try:
+        return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    except (ValueError, IndexError):
+        return 0, 0, 0
+
+
+def _shift(color: str, amount: int) -> str:
+    """Aclara (amount > 0) u oscurece un color."""
+    r, g, b = _rgb(color)
+    return "#{:02x}{:02x}{:02x}".format(
+        _clamp(r + amount), _clamp(g + amount), _clamp(b + amount))
+
+
+def _mix(color: str, other: str, weight: float) -> str:
+    """Mezcla dos colores; ``weight`` es el peso de ``other``."""
+    r1, g1, b1 = _rgb(color)
+    r2, g2, b2 = _rgb(other)
+    w = max(0.0, min(1.0, weight))
+    return "#{:02x}{:02x}{:02x}".format(
+        _clamp(r1 * (1 - w) + r2 * w),
+        _clamp(g1 * (1 - w) + g2 * w),
+        _clamp(b1 * (1 - w) + b2 * w))
+
 
 def level_colors(level: str) -> tuple[str, str]:
     """Par ``(color, fondo)`` para un nivel de hallazgo."""
@@ -74,7 +218,13 @@ def level_colors(level: str) -> tuple[str, str]:
 
 
 def stylesheet() -> str:
-    """Hoja de estilo global de la aplicacion."""
+    """Hoja de estilo global, generada con la paleta y metricas vigentes."""
+    radius = METRICS["radius"]
+    radius_sm = max(radius - 1, 0)
+    radius_lg = radius + 1
+    pad_v = METRICS["pad_v"]
+    pad_h = METRICS["pad_h"]
+    row_height = METRICS["row_height"]
     return f"""
 /* ---------- base ---------- */
 QWidget {{
@@ -98,14 +248,14 @@ QMenuBar {{
     border-bottom: 1px solid {C['border']};
     padding: 2px 4px;
 }}
-QMenuBar::item {{ padding: 5px 10px; background: transparent; border-radius: 4px; }}
+QMenuBar::item {{ padding: 5px 10px; background: transparent; border-radius: {radius_sm}px; }}
 QMenuBar::item:selected {{ background-color: {C['accent_soft']}; color: {C['accent']}; }}
 QMenu {{
     background-color: {C['surface']};
     border: 1px solid {C['border']};
     padding: 5px;
 }}
-QMenu::item {{ padding: 6px 26px 6px 22px; border-radius: 4px; }}
+QMenu::item {{ padding: 6px 26px 6px 22px; border-radius: {radius_sm}px; }}
 QMenu::item:selected {{ background-color: {C['accent_soft']}; color: {C['accent']}; }}
 QMenu::separator {{ height: 1px; background: {C['divider']}; margin: 5px 8px; }}
 
@@ -121,7 +271,7 @@ QToolBar::separator {{ width: 1px; background: {C['divider']}; margin: 5px 6px; 
 QToolButton {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 5px;
+    border-radius: {radius}px;
     padding: 5px 9px;
     color: {C['text_soft']};
 }}
@@ -180,7 +330,7 @@ QTabBar::tab:selected {{ color: {C['accent']}; border-bottom-color: {C['accent']
 QGroupBox {{
     background-color: {C['surface']};
     border: 1px solid {C['border']};
-    border-radius: 6px;
+    border-radius: {radius_lg}px;
     margin-top: 16px;
     padding: 10px 10px 8px 10px;
     font-weight: 600;
@@ -201,9 +351,9 @@ QPushButton {{
     background-color: {C['surface']};
     color: {C['text']};
     border: 1px solid {C['border_strong']};
-    border-radius: 5px;
-    padding: 6px 14px;
-    min-height: 18px;
+    border-radius: {radius}px;
+    padding: {pad_v + 1}px {pad_h + 6}px;
+    min-height: {row_height - 6}px;
 }}
 QPushButton:hover {{ background-color: {C['sunken']}; border-color: {C['text_muted']}; }}
 QPushButton:pressed {{ background-color: {C['border']}; }}
@@ -233,8 +383,8 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit, QDate
     background-color: {C['surface']};
     color: {C['text']};
     border: 1px solid {C['border_strong']};
-    border-radius: 5px;
-    padding: 5px 8px;
+    border-radius: {radius}px;
+    padding: {pad_v}px {pad_h}px;
     selection-background-color: {C['accent']};
     selection-color: #ffffff;
 }}
@@ -308,7 +458,7 @@ QTableWidget, QTableView, QTreeWidget, QTreeView, QListWidget, QListView {{
     background-color: {C['surface']};
     alternate-background-color: {C['surface_alt']};
     border: 1px solid {C['border']};
-    border-radius: 5px;
+    border-radius: {radius}px;
     gridline-color: {C['divider']};
     selection-background-color: {C['accent_soft']};
     selection-color: {C['text']};
@@ -337,7 +487,7 @@ QTableCornerButton::section {{ background-color: {C['surface_alt']}; border: non
 QScrollBar:vertical {{ background: transparent; width: 11px; margin: 0; }}
 QScrollBar:horizontal {{ background: transparent; height: 11px; margin: 0; }}
 QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
-    background: #c3ccd5; border-radius: 5px; min-height: 28px; min-width: 28px;
+    background: #c3ccd5; border-radius: {radius}px; min-height: 28px; min-width: 28px;
 }}
 QScrollBar::handle:hover {{ background: {C['text_muted']}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
@@ -347,12 +497,12 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QProgressBar {{
     background-color: {C['sunken']};
     border: none;
-    border-radius: 4px;
+    border-radius: {radius_sm}px;
     height: 6px;
     text-align: center;
     color: transparent;
 }}
-QProgressBar::chunk {{ background-color: {C['accent']}; border-radius: 4px; }}
+QProgressBar::chunk {{ background-color: {C['accent']}; border-radius: {radius_sm}px; }}
 QSplitter::handle {{ background-color: {C['border']}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
@@ -381,6 +531,6 @@ QFrame[role="hline"] {{ background-color: {C['divider']}; max-height: 1px; borde
 QFrame[role="card"] {{
     background-color: {C['surface']};
     border: 1px solid {C['border']};
-    border-radius: 6px;
+    border-radius: {radius_lg}px;
 }}
 """

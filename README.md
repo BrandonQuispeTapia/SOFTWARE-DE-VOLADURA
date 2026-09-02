@@ -42,6 +42,7 @@ Geometría ─▶ Carga ─▶ Secuencia ─▶ Análisis ─▶ Optimización �
 | **Economía** | Modelo mina-planta: el costo de carguío, acarreo y chancado escala con el tamaño medio de fragmento, así que la malla más barata en voladura casi nunca es la más barata por tonelada. |
 | **Optimización** | Barrido de burden y relación S/B evaluando cada escenario con el motor completo, descartando los que incumplen los límites ambientales y proponiendo el de menor costo total por tonelada. |
 | **Visor 3D** | Navegación completa —órbita, terreno, joystick y planta 2D—, giro alrededor del taladro seleccionado, vistas normalizadas, proyección ortográfica y exageración vertical. Selección por clic, por ventana, por tipo o desde la tabla. |
+| **Personalización** | 229 opciones en 17 categorías: paleta y tipografía, aspecto del visor, colores por tipo de taladro, interacción, capas, animación, gráficos, unidades, valores por defecto del diseño, parámetros de análisis, límites normativos y costos. Se aplican en caliente y viajan en un archivo exportable. |
 | **Edición por taladro** | Cada taladro se abre y se interviene: tipo, geometría, retardo y columna de carga plataforma por plataforma. Los cambios manuales quedan protegidos de la regla global y se replican sobre la selección. |
 | **Revisión** | Más de veinte reglas de buena práctica (H/B, S/B, T/B, B/D, tiempos de alivio, taco mínimo, diámetro crítico del explosivo…) que califican el diseño de 0 a 100 y explican cada hallazgo. |
 
@@ -110,20 +111,25 @@ la secuencia de salida se reproduce como animación sobre el visor.
 | Arrastrar con el izquierdo | Girar |
 | Rueda | Acercar y alejar |
 | Botón central, o Shift + izquierdo | Desplazar |
-| Ctrl + izquierdo | Rotar el encuadre |
-| Clic sin arrastrar | Seleccionar el taladro |
+| Doble clic | Seleccionar el taladro |
 | Ctrl + clic · Shift + clic | Agregar a la selección · alternar |
-| Doble clic | Centrar el giro en ese taladro |
 
 Girar y seleccionar comparten el botón izquierdo: se distingue el clic del
-arrastre por el desplazamiento del puntero, así que ninguna de las dos cosas
-le quita el botón a la otra.
+arrastre por el desplazamiento del puntero, así que ninguna de las dos cosas le
+quita el botón a la otra. Si prefiere seleccionar con una sola pulsación,
+cámbielo en **Preferencias > Interacción**.
+
+La cámara trabaja en modo **tornamesa**: gira alrededor del eje vertical con la
+elevación acotada, de modo que el modelo nunca queda de cabeza por seguir
+arrastrando. Quien prefiera el giro esférico clásico lo tiene en el mismo
+desplegable.
 
 **Atajos**: `F5` generar malla · `F6` analizar · `F7` optimizar · `F8` animar ·
 `Ctrl+1..4` vistas · `Ctrl+0` encuadrar · `Ctrl+R` reporte ·
 `Ctrl+A` seleccionar todo · `Ctrl+D` quitar selección · `B` selección por
 ventana. Sobre el visor: flechas para girar, `F` centrar en la selección,
-`R` encuadrar, `P` proyección, `Esc` deseleccionar.
+`R` encuadrar, `P` proyección, `Esc` deseleccionar. `Ctrl+,` abre las
+preferencias.
 
 ---
 

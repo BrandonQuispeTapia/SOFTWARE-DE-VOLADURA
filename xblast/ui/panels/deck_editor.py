@@ -48,8 +48,10 @@ class DeckRow(QFrame):
         top = QHBoxLayout()
         top.setSpacing(5)
 
-        self._marker = QLabel("█")
-        self._marker.setFixedWidth(8)
+        # Franja de color que identifica el tipo de plataforma de un vistazo.
+        self._marker = QFrame()
+        self._marker.setFixedWidth(4)
+        self._marker.setMinimumHeight(20)
         top.addWidget(self._marker)
 
         self.kind = W.combo([k.value for k in DeckKind], _kind_value(deck.kind))
@@ -64,11 +66,11 @@ class DeckRow(QFrame):
 
         top.addStretch(1)
 
-        self.btn_up = _mini("▲", "Subir la plataforma hacia el collar")
+        self.btn_up = _mini("up", "Subir la plataforma hacia el collar")
         self.btn_up.clicked.connect(lambda: self.moved.emit(self, +1))
-        self.btn_down = _mini("▼", "Bajar la plataforma hacia el fondo")
+        self.btn_down = _mini("down", "Bajar la plataforma hacia el fondo")
         self.btn_down.clicked.connect(lambda: self.moved.emit(self, -1))
-        self.btn_del = _mini("✕", "Eliminar la plataforma")
+        self.btn_del = _mini("close", "Eliminar la plataforma")
         self.btn_del.clicked.connect(lambda: self.removed.emit(self))
         for b in (self.btn_up, self.btn_down, self.btn_del):
             top.addWidget(b)
@@ -153,7 +155,8 @@ class DeckRow(QFrame):
         is_charge = kind is DeckKind.CARGA
         self.detail.setVisible(is_charge)
         self._marker.setStyleSheet(
-            f"color:{_KIND_COLOR.get(kind, C['text_muted'])}; background:transparent;")
+            f"background-color:{_KIND_COLOR.get(kind, C['text_muted'])};"
+            "border:none; border-radius:2px;")
 
     def _emit(self) -> None:
         self.refresh_summary()
@@ -325,9 +328,10 @@ def _kind_value(kind) -> str:
     return kind.value if hasattr(kind, "value") else str(kind)
 
 
-def _mini(text: str, tip: str) -> QToolButton:
+def _mini(icon_name: str, tip: str) -> QToolButton:
+    """Boton compacto con icono vectorial."""
     btn = QToolButton()
-    btn.setText(text)
+    btn.setIcon(icons.icon(icon_name, 13))
     btn.setToolTip(tip)
     btn.setFixedSize(22, 22)
     return btn

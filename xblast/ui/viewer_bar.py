@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from . import icons
 from .theme import C, FONT_SIZE_SMALL
+from .settings import settings as global_settings
 from .viewer3d import NavMode, STANDARD_VIEWS
 
 
@@ -72,10 +73,13 @@ class ViewerBar(QFrame):
         lay.addWidget(_label("Navegacion"))
         self.nav_combo = QComboBox()
         self.nav_combo.addItems([m.value for m in NavMode])
+        self.nav_combo.setCurrentText(
+            str(global_settings().get("interaction.nav_mode")))
         self.nav_combo.setMinimumWidth(150)
         self.nav_combo.setToolTip(
-            "Orbita libre: giro esferico sin restriccion.\n"
-            "Terreno: mantiene el eje Z vertical, comodo para banco.\n"
+            "Tornamesa: gira alrededor del eje vertical sin que el modelo se voltee.\n"
+            "Orbita libre: giro esferico sin restriccion, permite rotar el encuadre.\n"
+            "Terreno: estilo de VTK para relieve, con la vertical anclada.\n"
             "Joystick: el movimiento continua mientras el boton siga pulsado.\n"
             "Planta 2D: desplazamiento y zoom sin giro, con proyeccion ortografica.")
         self.nav_combo.currentTextChanged.connect(self.nav_mode_changed)
@@ -101,23 +105,20 @@ class ViewerBar(QFrame):
 
         # -- giro alrededor del punto focal ------------------------------
         lay.addWidget(_label("Girar"))
-        for text, tip, az, el in (("◀", "Girar a la izquierda", -12.0, 0.0),
-                                  ("▶", "Girar a la derecha", 12.0, 0.0),
-                                  ("▲", "Elevar la camara", 0.0, 12.0),
-                                  ("▼", "Bajar la camara", 0.0, -12.0)):
-            btn = QToolButton()
-            btn.setText(text)
-            btn.setToolTip(f"{tip} alrededor del punto focal")
+        for icon, tip, az, el in (("left", "Girar a la izquierda", -1.0, 0.0),
+                                  ("right", "Girar a la derecha", 1.0, 0.0),
+                                  ("up", "Elevar la camara", 0.0, 1.0),
+                                  ("down", "Bajar la camara", 0.0, -1.0)):
+            btn = _tool(icon, f"{tip} alrededor del punto focal")
             btn.setAutoRepeat(True)
             btn.setAutoRepeatInterval(60)
-            btn.clicked.connect(lambda _c=False, a=az, e=el: self.orbit_requested.emit(a, e))
+            btn.clicked.connect(
+                lambda _c=False, a=az, e=el: self.orbit_requested.emit(a, e))
             lay.addWidget(btn)
 
-        for text, tip, deg in (("↺", "Rotar el encuadre a la izquierda", -10.0),
-                               ("↻", "Rotar el encuadre a la derecha", 10.0)):
-            btn = QToolButton()
-            btn.setText(text)
-            btn.setToolTip(tip)
+        for icon, tip, deg in (("rotate_ccw", "Rotar el encuadre a la izquierda", -10.0),
+                               ("rotate_cw", "Rotar el encuadre a la derecha", 10.0)):
+            btn = _tool(icon, tip)
             btn.setAutoRepeat(True)
             btn.clicked.connect(lambda _c=False, d=deg: self.roll_requested.emit(d))
             lay.addWidget(btn)
@@ -129,12 +130,10 @@ class ViewerBar(QFrame):
         lay.addWidget(_separator())
 
         # -- encuadres ----------------------------------------------------
-        for text, tip, signal in (("＋", "Acercar", None), ("－", "Alejar", None)):
-            btn = QToolButton()
-            btn.setText(text)
-            btn.setToolTip(tip)
+        for icon, tip, factor in (("zoom_in", "Acercar", 1.15),
+                                  ("zoom_out", "Alejar", 1 / 1.15)):
+            btn = _tool(icon, tip)
             btn.setAutoRepeat(True)
-            factor = 1.15 if "Acercar" in tip else 1 / 1.15
             btn.clicked.connect(lambda _c=False, f=factor: self.dolly_requested.emit(f))
             lay.addWidget(btn)
 
@@ -174,7 +173,8 @@ class ViewerBar(QFrame):
         lay.addWidget(_label("Escala Z"))
         self.z_slider = QSlider(Qt.Orientation.Horizontal)
         self.z_slider.setRange(10, 50)
-        self.z_slider.setValue(10)
+        self.z_slider.setValue(
+            int(float(global_settings().get("viewer.z_exaggeration")) * 10))
         self.z_slider.setFixedWidth(90)
         self.z_slider.setToolTip("Exageracion vertical del modelo")
         self.z_slider.valueChanged.connect(

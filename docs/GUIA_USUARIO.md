@@ -36,22 +36,27 @@ cerrar. `Ver ▸ Restablecer paneles` vuelve a la disposición original.
 | Arrastrar con el izquierdo | Girar alrededor del punto focal |
 | Rueda | Acercar y alejar |
 | Botón central, o Shift + izquierdo | Desplazar |
-| Ctrl + izquierdo | Rotar el encuadre |
 | Botón derecho arrastrando | Zoom continuo |
-| Clic sin arrastrar | Seleccionar el taladro bajo el cursor |
+| Doble clic | Seleccionar el taladro bajo el cursor |
 | Ctrl + clic | Agregar a la selección |
 | Shift + clic | Alternar ese taladro en la selección |
-| Doble clic | Centrar el giro en ese taladro |
 
-Girar y seleccionar comparten el botón izquierdo. El programa distingue el
-clic del arrastre por lo que se desplaza el puntero, así que no hay que
-cambiar de herramienta para pasar de una cosa a la otra.
+Girar y seleccionar comparten el botón izquierdo. El programa distingue el clic
+del arrastre por lo que se desplaza el puntero, así que no hay que cambiar de
+herramienta para pasar de una cosa a la otra. La selección va por defecto con
+**doble clic**, que deja la pulsación simple entera para girar; en
+**Preferencias > Interacción** se puede pasar a un solo clic y ajustar el radio
+de captura y la tolerancia de arrastre.
+
+No hace falta apuntar con precisión al eje del taladro: si la pulsación cae
+dentro del radio de captura —16 píxeles por defecto—, el taladro más próximo se
+selecciona igual.
 
 ### Barra del visor
 
 | Control | Para qué sirve |
 | --- | --- |
-| **Navegación** | *Órbita libre* gira sin restricción. *Terreno* mantiene el eje Z vertical, que es lo cómodo en banco. *Joystick* sigue moviendo mientras el botón siga pulsado. *Planta 2D* deja solo desplazamiento y zoom, con proyección ortográfica. |
+| **Navegación** | *Tornamesa* es el modo por defecto: gira alrededor del eje vertical con la elevación acotada, de manera que el modelo nunca se voltea por seguir arrastrando. *Órbita libre* es el giro esférico clásico, sin restricción y con posibilidad de rotar el encuadre. *Terreno* es el estilo de VTK para relieve. *Joystick* sigue moviendo mientras el botón siga pulsado. *Planta 2D* deja solo desplazamiento y zoom, con proyección ortográfica. |
 | **Vista** | Isométrica, planta y las cuatro ortogonales por punto cardinal. |
 | **Proyección** | Alterna entre perspectiva y ortográfica; la ortográfica es la que sirve para medir sobre el plano. |
 | **Girar** | Las flechas orbitan alrededor del punto focal —el modelo no se mueve, la cámara sí—, y las dos curvas rotan el encuadre. Mantener pulsado repite el giro. |
@@ -323,7 +328,48 @@ El formato completo está en [FORMATO_DATOS.md](FORMATO_DATOS.md).
 
 ---
 
-## 14. Antes de usarlo en producción
+## 14. Personalizar el programa
+
+**Ver > Preferencias**, o `Ctrl+,`. Son 229 opciones repartidas en 17
+categorías, con buscador arriba a la izquierda: escriba «burden», «clic» o
+«chancado» y aparecen solo las opciones que hablan de eso.
+
+| Categoría | Qué controla |
+| --- | --- |
+| **Apariencia** | Paleta base, color de acento y de cada superficie, colores de estado, tipografía y tamaños, densidad de la interfaz, radio de esquinas, estilo y tamaño de los iconos. |
+| **Visor 3D** | Fondo y degradado, rejilla y rótulos, tríada y cubo de orientación, suavizado, sombreado, transparencia por capas, proyección e iluminación. |
+| **Taladros** | Radio visual y resolución del cilindro, colores y opacidad del taco y de la cámara de aire, collares, etiquetas y su contenido, aspecto del resaltado de selección. |
+| **Colores por tipo** | Un color por cada clase: producción, precorte, recorte, amortiguado, alivio, rainura y contorno. |
+| **Interacción** | Modo de navegación, elevación máxima, velocidad de giro y de zoom, eje vertical invertido, selección con uno o dos clics, radio de captura, tolerancia de arrastre e intervalo de doble clic. |
+| **Capas y terreno** | Color y opacidad de la topografía, su malla de alambre, la cara libre y el piso de banco. |
+| **Animación** | Cuadros por segundo, velocidad, duración del destello y colores de pendiente, detonando y disparado. |
+| **Campo de energía** | Tamaño de celda, radio de influencia, número de isosuperficies, opacidad y mapa de color. |
+| **Gráficos** | Grosor de línea, rejilla, tamaño de fuente, resolución de exportación y los ocho colores de serie. |
+| **Unidades y formato** | Sistema de unidades, separadores y decimales por magnitud. |
+| **Diseño por defecto** | Los 39 valores con los que arranca un proyecto nuevo: perforación, malla, carguío, macizo y secuencia. |
+| **Análisis** | P80 objetivo, umbral de sobretamaño, desviación de perforación, ventana de cooperación, simulaciones de dispersión, onda semilla y constantes de proyección y de onda aérea. |
+| **Límites y normativa** | Receptor, umbrales de PPV y onda aérea, radio de exclusión, tipo de estructura y constantes de sitio. |
+| **Costos** | Costos unitarios de perforación, accesorios, mano de obra, carguío, acarreo, chancado y voladura secundaria, con sus exponentes de sensibilidad. |
+| **Optimización** | Rango de burden, número de pasos y relaciones S/B del barrido. |
+| **Reportes** | Empresa, responsable, cargo, nota al pie y qué secciones incluir. |
+| **Comportamiento** | Página de inicio al arrancar, malla de ejemplo, análisis automático, confirmación al salir, recientes y detalle de la bitácora. |
+
+Los cambios se aplican al instante: un acento nuevo repinta la aplicación
+entera, y tocar el aspecto de los taladros reconstruye la escena sin que haya
+que regenerar la malla.
+
+Cada opción tiene a su derecha un botón que la devuelve a su valor de fábrica, y
+abajo están **Restablecer categoría** y **Restablecer todo**. Las opciones
+marcadas con asterisco necesitan reiniciar.
+
+**Exportar** guarda la configuración en un archivo JSON e **Importar** la
+recupera: sirve para llevar el mismo entorno a otra máquina o para que todo el
+equipo trabaje con los mismos costos y límites. En disco solo se guarda lo que
+difiere del valor por defecto, así que el archivo se mantiene legible.
+
+---
+
+## 15. Antes de usarlo en producción
 
 Los modelos son predictivos y traen constantes genéricas. Calíbrelos con datos
 de su yacimiento:
@@ -354,6 +400,7 @@ de su yacimiento:
 | `Ctrl+I` | Importar taladros |
 | `Ctrl+R` | Reporte técnico |
 | `Ctrl+Alt+1` … `Ctrl+Alt+9` | Mostrar u ocultar cada panel |
+| `Ctrl+,` | Preferencias |
 | `Ctrl+A` · `Ctrl+D` · `Ctrl+Shift+I` | Seleccionar todo · quitar selección · invertir |
 | `B` | Selección por ventana |
 

@@ -1,15 +1,27 @@
 """Visor 3D de la voladura.
 
 Envuelve el interactor de VTK/PyVista y concentra la construccion de la escena
-—terreno, cara libre, columnas de carga, etiquetas, campo de energia— junto con
-la navegacion de camara y la seleccion interactiva de taladros.
+—terreno, cara libre, columnas de carga, campo de energia— junto con la
+navegacion de camara y la seleccion interactiva de taladros.
 
-Sobre la interaccion: el picking se implementa con observadores propios sobre
-el interactor de VTK en vez de con ``enable_point_picking``. La razon es que esa
-funcion se apropia del boton izquierdo y deja la escena sin rotacion. Aqui el
-boton izquierdo sigue perteneciendo al estilo de camara: se distingue un clic de
-un arrastre midiendo el desplazamiento entre pulsar y soltar, de modo que rotar
-y seleccionar conviven en el mismo boton.
+Dos decisiones de interaccion merecen explicacion:
+
+*Seleccion sin robar el boton izquierdo.* ``enable_point_picking`` de PyVista se
+apropia del boton izquierdo y deja la escena sin rotacion. Aqui el picking son
+observadores propios que no abortan el evento, de modo que el estilo de camara
+lo sigue recibiendo. Un clic se distingue de un arrastre por el desplazamiento
+del puntero, y el disparador —un clic o dos— es configurable.
+
+El gesto se cierra escuchando ``EndInteractionEvent`` del estilo y no
+``LeftButtonReleaseEvent`` del interactor: al empezar a rotar, el estilo de VTK
+toma el foco de los eventos y el de soltar el boton ya no llega a observadores
+externos.
+
+*Camara de tornamesa.* El estilo de VTK gira libremente y, al pasar por encima
+del cenit, el vector de vista queda invertido y el modelo aparece de cabeza.
+En vez de reimplementar la navegacion, se corrige la camara despues de cada
+interaccion: la elevacion se acota y el eje Z se fuerza hacia arriba, con lo que
+el giro se comporta como una tornamesa y nunca se voltea.
 """
 
 from __future__ import annotations
@@ -17,7 +29,7 @@ from __future__ import annotations
 import math
 import time
 from enum import Enum
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pyvista as pv
@@ -28,6 +40,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ..core.models import HOLE_TYPE_COLORS, Hole
+from .settings import Settings, settings as global_settings
 from .theme import C
 
 #: Variables por las que se puede tematizar la malla.
@@ -36,9 +49,13 @@ THEMES: Dict[str, Tuple[str, str]] = {
     "Retardo (ms)": ("delay_ms", "ms"),
     "Factor de potencia (kg/m3)": ("powder_factor", "kg/m3"),
     "Carga (kg)": ("charge_kg", "kg"),
+    "Energia (MJ)": ("energy_mj", "MJ"),
     "Burden real (m)": ("burden_real_m", "m"),
     "Burden de alivio (m)": ("relief_burden_m", "m"),
+    "Espaciamiento real (m)": ("spacing_real_m", "m"),
+    "Volumen (m3)": ("volume_m3", "m3"),
     "X50 previsto (cm)": ("x50_cm", "cm"),
+    "Uniformidad n": ("uniformity_n", ""),
     "Confinamiento": ("confinement", ""),
 }
 
@@ -46,6 +63,7 @@ THEMES: Dict[str, Tuple[str, str]] = {
 class NavMode(str, Enum):
     """Estilo de interaccion de la camara."""
 
+    TORNAMESA = "Tornamesa (sin volteo)"
     ORBITA = "Orbita libre"
     TERRENO = "Terreno (Z arriba)"
     JOYSTICK = "Joystick"
@@ -62,8 +80,13 @@ STANDARD_VIEWS = {
     "Oeste": "west",
 }
 
-_CLICK_PIXEL_TOLERANCE = 6      # px de desplazamiento que aun cuentan como clic
-_CLICK_TIME_TOLERANCE = 0.6     # s
+#: Contenido posible de las etiquetas de taladro.
+_LABEL_BUILDERS: Dict[str, Callable[[Hole], str]] = {
+    "Identificador": lambda h: h.hid,
+    "Retardo": lambda h: f"{h.delay_ms:,.0f} ms",
+    "Carga": lambda h: f"{h.charge_kg:,.0f} kg",
+    "Identificador y retardo": lambda h: f"{h.hid}  {h.delay_ms:,.0f} ms",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +102,6 @@ class _RubberBand(QWidget):
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self._origin: Optional[QPoint] = None
         self._current: Optional[QPoint] = None
@@ -119,10 +141,12 @@ class _RubberBand(QWidget):
         if self._origin is None or self._current is None:
             return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         rect = QRect(self._origin, self._current).normalized()
-        painter.fillRect(rect, QColor(22, 104, 179, 38))
-        painter.setPen(QPen(QColor(C["accent"]), 1, Qt.PenStyle.DashLine))
+        accent = QColor(C["accent"])
+        fill = QColor(accent)
+        fill.setAlpha(38)
+        painter.fillRect(rect, fill)
+        painter.setPen(QPen(accent, 1, Qt.PenStyle.DashLine))
         painter.drawRect(rect)
         painter.end()
 
@@ -140,9 +164,11 @@ class Viewer3D(QObject):
     frame_changed = Signal(float)
     animation_finished = Signal()
     status_message = Signal(str)
+    scene_rebuild_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, store: Optional[Settings] = None):
         super().__init__(parent)
+        self.cfg = store or global_settings()
         self.plotter = QtInteractor(parent)
         self.widget = self.plotter.interactor
 
@@ -151,24 +177,27 @@ class Viewer3D(QObject):
         self._actors: Dict[str, object] = {}
         self._charge_meshes: List[pv.PolyData] = []
         self._charge_index: List[int] = []
-        self._labels_visible = False
+        self._labels_visible = bool(self.cfg.get("holes.labels_on_start"))
         self._theme = "Tipo de taladro"
         self._selection: List[str] = []
-        self._z_scale = 1.0
-        self._nav_mode = NavMode.ORBITA
-        self._user_parallel = False   # proyeccion elegida por el usuario
+        self._z_scale = float(self.cfg.get("viewer.z_exaggeration"))
+        self._nav_mode = NavMode(self.cfg.get("interaction.nav_mode"))
+        self._user_parallel = bool(self.cfg.get("viewer.parallel_projection"))
+        self._turntable = True
 
         # deteccion de clic frente a arrastre
         self._press_pos: Tuple[int, int] = (0, 0)
         self._press_time = 0.0
+        self._left_down = False
         self._last_click_time = 0.0
-        self._last_click_hid: Optional[str] = None
+        self._last_click_pos: Tuple[int, int] = (0, 0)
+        self._last_select_time = 0.0
 
         # animaciones
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._anim_t = 0.0
-        self._anim_speed = 1.0
+        self._anim_step = 1.0
         self._anim_end = 0.0
 
         self._spin_timer = QTimer(self)
@@ -180,26 +209,52 @@ class Viewer3D(QObject):
 
         self._setup_scene()
         self._install_interaction()
+        self.cfg.changed.connect(self._on_setting_changed)
 
     # ------------------------------------------------------------------
     # Escena
     # ------------------------------------------------------------------
     def _setup_scene(self) -> None:
         p = self.plotter
-        p.set_background(C["viewport"], top="#ffffff")
+        cfg = self.cfg
+        bottom = str(cfg.get("viewer.background_bottom"))
+        top = str(cfg.get("viewer.background_top"))
+        p.set_background(bottom, top=top if cfg.get("viewer.gradient") else None)
+
+        aa = str(cfg.get("viewer.antialiasing"))
         try:
-            p.enable_anti_aliasing("fxaa")
+            if aa == "Ninguno":
+                p.disable_anti_aliasing()
+            else:
+                p.enable_anti_aliasing(aa.lower())
         except Exception:
             pass
+        if cfg.get("viewer.depth_peeling"):
+            try:
+                p.enable_depth_peeling()
+            except Exception:
+                pass
+        if self._user_parallel:
+            try:
+                p.enable_parallel_projection()
+            except Exception:
+                pass
         self._add_orientation()
 
     def _add_orientation(self) -> None:
+        if not self.cfg.get("viewer.show_axes"):
+            return
         try:
             self.plotter.add_axes(
                 color=C["text_soft"], x_color="#c0392b", y_color="#1a7f4b",
                 z_color="#1668b3", line_width=2, labels_off=False)
         except Exception:
             pass
+        if self.cfg.get("viewer.show_orientation_cube"):
+            try:
+                self.plotter.add_camera_orientation_widget()
+            except Exception:
+                pass
 
     def clear(self) -> None:
         self.plotter.clear()
@@ -211,7 +266,7 @@ class Viewer3D(QObject):
         holes: Sequence[Hole],
         topography: Optional[np.ndarray] = None,
         free_face: Optional[np.ndarray] = None,
-        show_labels: bool = False,
+        show_labels: Optional[bool] = None,
         show_bench: bool = True,
         reset_camera: bool = True,
     ) -> None:
@@ -234,7 +289,7 @@ class Viewer3D(QObject):
 
         self._add_holes()
         self.set_theme(self._theme)
-        self.set_labels_visible(show_labels)
+        self.set_labels_visible(self._labels_visible if show_labels is None else show_labels)
         self._add_grid()
 
         # Conserva la seleccion que siga existiendo tras regenerar la malla.
@@ -247,30 +302,41 @@ class Viewer3D(QObject):
         self.plotter.render()
 
     def _add_topography(self, points: np.ndarray) -> None:
+        cfg = self.cfg
         cloud = pv.PolyData(np.asarray(points, float))
         try:
             surf = cloud.delaunay_2d(alpha=0.0)
         except Exception:
             return
         self._actors["topo"] = self.plotter.add_mesh(
-            surf, color="#c9d3c2", opacity=0.55, smooth_shading=True,
-            show_edges=False, name="topo", ambient=0.35, diffuse=0.7)
-        self._actors["topo_wire"] = self.plotter.add_mesh(
-            surf, style="wireframe", color="#9fae97", opacity=0.28,
-            line_width=1, name="topo_wire")
+            surf, color=str(cfg.get("layers.topo_color")),
+            opacity=float(cfg.get("layers.topo_opacity")),
+            smooth_shading=bool(cfg.get("viewer.smooth_shading")),
+            show_edges=False, name="topo", pickable=False,
+            ambient=float(cfg.get("viewer.ambient")),
+            diffuse=float(cfg.get("viewer.diffuse")))
+        if cfg.get("layers.topo_wireframe"):
+            self._actors["topo_wire"] = self.plotter.add_mesh(
+                surf, style="wireframe", color=str(cfg.get("layers.topo_wire_color")),
+                opacity=float(cfg.get("layers.topo_wire_opacity")),
+                line_width=1, name="topo_wire", pickable=False)
 
     def _add_bench_reference(self) -> None:
+        margin = float(self.cfg.get("layers.bench_margin"))
         toes = np.array([h.toe for h in self._holes], float)
         z = float(np.percentile(toes[:, 2], 50))
-        lo = self._collars.min(axis=0) - 8.0
-        hi = self._collars.max(axis=0) + 8.0
+        lo = self._collars.min(axis=0) - margin
+        hi = self._collars.max(axis=0) + margin
         plane = pv.Plane(center=((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, z),
                          direction=(0, 0, 1),
                          i_size=(hi[0] - lo[0]), j_size=(hi[1] - lo[1]))
         self._actors["bench"] = self.plotter.add_mesh(
-            plane, color="#dfe4e8", opacity=0.35, name="bench", show_edges=False)
+            plane, color=str(self.cfg.get("layers.bench_color")),
+            opacity=float(self.cfg.get("layers.bench_opacity")),
+            name="bench", show_edges=False, pickable=False)
 
     def _add_free_face(self, face: np.ndarray) -> None:
+        cfg = self.cfg
         pts = np.asarray(face, float)
         if pts.shape[1] == 2:
             z_top = float(self._collars[:, 2].max())
@@ -286,15 +352,24 @@ class Viewer3D(QObject):
         faces: List[int] = []
         for i in range(n - 1):
             faces += [4, i, i + 1, n + i + 1, n + i]
-        if faces:
-            mesh = pv.PolyData(verts, np.array(faces))
-            self._actors["face"] = self.plotter.add_mesh(
-                mesh, color=C["accent"], opacity=0.14, name="free_face", show_edges=False)
-            self._actors["face_edge"] = self.plotter.add_mesh(
-                pv.lines_from_points(pts), color=C["accent"], line_width=3, name="face_edge")
+        if not faces:
+            return
+        color = str(cfg.get("layers.face_color"))
+        self._actors["face"] = self.plotter.add_mesh(
+            pv.PolyData(verts, np.array(faces)), color=color,
+            opacity=float(cfg.get("layers.face_opacity")),
+            name="free_face", show_edges=False, pickable=False)
+        self._actors["face_edge"] = self.plotter.add_mesh(
+            pv.lines_from_points(pts), color=color,
+            line_width=int(cfg.get("layers.face_line_width")), name="face_edge",
+            pickable=False)
 
     def _add_holes(self) -> None:
         """Dibuja taco, aire y cada plataforma de carga de todos los taladros."""
+        cfg = self.cfg
+        resolution = int(cfg.get("holes.resolution"))
+        smooth = bool(cfg.get("viewer.smooth_shading"))
+
         stem_blocks: List[pv.PolyData] = []
         air_blocks: List[pv.PolyData] = []
         self._charge_meshes = []
@@ -307,7 +382,7 @@ class Viewer3D(QObject):
                 p1 = h.point_from_toe(d.from_toe_m + d.length_m)
                 cyl = pv.Cylinder(center=(p0 + p1) / 2.0, direction=h.axis,
                                   radius=r_vis, height=max(d.length_m, 0.05),
-                                  resolution=16, capping=True)
+                                  resolution=resolution, capping=True)
                 kind = d.kind.value if hasattr(d.kind, "value") else str(d.kind)
                 if kind == "Carga":
                     self._charge_meshes.append(cyl)
@@ -319,25 +394,34 @@ class Viewer3D(QObject):
 
         if stem_blocks:
             self._actors["stem"] = self.plotter.add_mesh(
-                _merge(stem_blocks), color="#9aa5b1", opacity=0.9,
-                name="stemming", smooth_shading=True)
+                _merge(stem_blocks), color=str(cfg.get("holes.stem_color")),
+                opacity=float(cfg.get("holes.stem_opacity")),
+                name="stemming", smooth_shading=smooth)
         if air_blocks:
             self._actors["air"] = self.plotter.add_mesh(
-                _merge(air_blocks), color="#e8edf2", opacity=0.45,
-                name="airdeck", smooth_shading=True)
+                _merge(air_blocks), color=str(cfg.get("holes.air_color")),
+                opacity=float(cfg.get("holes.air_opacity")),
+                name="airdeck", smooth_shading=smooth)
 
-        cloud = pv.PolyData(self._collars)
-        self._actors["collars"] = self.plotter.add_mesh(
-            cloud, color=C["text"], point_size=7, render_points_as_spheres=True,
-            name="collars")
+        if cfg.get("holes.show_collars"):
+            self._actors["collars"] = self.plotter.add_mesh(
+                pv.PolyData(self._collars), color=str(cfg.get("holes.collar_color")),
+                point_size=int(cfg.get("holes.collar_size")),
+                render_points_as_spheres=True, name="collars")
 
     def _hole_radius(self, hole: Hole) -> float:
-        return max(hole.diameter_m / 2.0 * 3.0, 0.16)
+        factor = float(self.cfg.get("holes.radius_factor"))
+        minimum = float(self.cfg.get("holes.radius_min"))
+        return max(hole.diameter_m / 2.0 * factor, minimum)
 
     def _add_grid(self) -> None:
+        if not self.cfg.get("viewer.show_grid"):
+            return
         try:
             self.plotter.show_grid(
-                color=C["grid"], font_size=9, location="outer", grid="back",
+                color=str(self.cfg.get("viewer.grid_color")),
+                font_size=int(self.cfg.get("viewer.grid_font_size")),
+                location="outer", grid="back",
                 xtitle="Este (m)", ytitle="Norte (m)", ztitle="Cota (m)")
         except Exception:
             pass
@@ -351,31 +435,28 @@ class Viewer3D(QObject):
         if not self._holes or not self._charge_meshes:
             return
 
-        for key in list(self._actors):
-            if key.startswith("charge"):
-                self.plotter.remove_actor(self._actors[key], render=False)
-                del self._actors[key]
-        try:
-            self.plotter.remove_scalar_bar()
-        except Exception:
-            pass
-
+        self._remove_charge_actors()
         attr, _unit = THEMES[self._theme]
+        smooth = bool(self.cfg.get("viewer.smooth_shading"))
+        opacity = float(self.cfg.get("holes.charge_opacity"))
+        colors = self.cfg.hole_colors()
+
         if attr == "type":
             blocks: Dict[str, List[pv.PolyData]] = {}
             for mesh, idx in zip(self._charge_meshes, self._charge_index):
                 blocks.setdefault(self._holes[idx].hole_type, []).append(mesh)
             for htype, meshes in blocks.items():
                 self._actors[f"charge_{htype}"] = self.plotter.add_mesh(
-                    _merge(meshes), color=HOLE_TYPE_COLORS.get(htype, "#c0392b"),
-                    name=f"charge_{htype}", smooth_shading=True)
+                    _merge(meshes),
+                    color=colors.get(htype, HOLE_TYPE_COLORS.get(htype, "#c0392b")),
+                    name=f"charge_{htype}", smooth_shading=smooth, opacity=opacity)
         else:
             values = np.array([getattr(self._holes[i], attr, 0.0)
                                for i in self._charge_index], float)
             mesh = _merge(self._charge_meshes, scalars=values, name=self._theme)
             self._actors["charge"] = self.plotter.add_mesh(
                 mesh, scalars=self._theme, cmap="viridis", name="charge",
-                smooth_shading=True,
+                smooth_shading=smooth, opacity=opacity,
                 scalar_bar_args={
                     "title": self._theme, "color": C["text"], "n_labels": 5,
                     "vertical": True, "position_x": 0.88, "position_y": 0.12,
@@ -384,16 +465,31 @@ class Viewer3D(QObject):
                 })
         self.plotter.render()
 
+    def _remove_charge_actors(self) -> None:
+        for key in [k for k in self._actors if k.startswith("charge")]:
+            self.plotter.remove_actor(self._actors[key], render=False)
+            del self._actors[key]
+        try:
+            self.plotter.remove_scalar_bar()
+        except Exception:
+            pass
+
     def set_labels_visible(self, visible: bool) -> None:
         self._labels_visible = visible
         if self._actors.get("labels") is not None:
             self.plotter.remove_actor(self._actors["labels"], render=False)
             self._actors["labels"] = None
         if visible and self._holes:
+            cfg = self.cfg
+            builder = _LABEL_BUILDERS.get(str(cfg.get("holes.label_content")),
+                                          _LABEL_BUILDERS["Identificador"])
+            offset = np.array([0.0, 0.0, float(cfg.get("holes.label_offset"))])
             self._actors["labels"] = self.plotter.add_point_labels(
-                self._collars + np.array([0.0, 0.0, 1.2]),
-                [h.hid for h in self._holes], font_size=11, text_color=C["text"],
-                shape=None, always_visible=True, point_size=1, name="labels", bold=False)
+                self._collars + offset, [builder(h) for h in self._holes],
+                font_size=int(cfg.get("holes.label_font_size")),
+                text_color=str(cfg.get("holes.label_color")),
+                shape=None, always_visible=True, point_size=1,
+                name="labels", bold=False)
         self.plotter.render()
 
     def set_z_exaggeration(self, factor: float) -> None:
@@ -408,10 +504,11 @@ class Viewer3D(QObject):
     # ------------------------------------------------------------------
     # Campo de energia
     # ------------------------------------------------------------------
-    def show_energy_field(self, field, contours: int = 6, opacity: float = 0.35) -> None:
+    def show_energy_field(self, field) -> None:
         self.hide_energy_field()
         if field is None:
             return
+        cfg = self.cfg
         grid = pv.ImageData(dimensions=field.dims, spacing=(field.spacing,) * 3,
                             origin=tuple(field.origin))
         grid["Energia (MJ/m3)"] = field.flat
@@ -419,16 +516,17 @@ class Viewer3D(QObject):
         if active.size == 0:
             return
         vmax = float(np.percentile(active, 97))
+        levels = np.linspace(vmax * 0.15, vmax, int(cfg.get("energy.contours")))
         try:
-            iso = grid.contour(isosurfaces=np.linspace(vmax * 0.15, vmax, contours).tolist(),
-                               scalars="Energia (MJ/m3)")
+            iso = grid.contour(isosurfaces=levels.tolist(), scalars="Energia (MJ/m3)")
         except Exception:
             return
         if iso.n_points == 0:
             return
         self._actors["energy"] = self.plotter.add_mesh(
-            iso, scalars="Energia (MJ/m3)", cmap="inferno", opacity=opacity,
-            name="energy_field", smooth_shading=True,
+            iso, scalars="Energia (MJ/m3)", cmap=str(cfg.get("energy.colormap")),
+            opacity=float(cfg.get("energy.opacity")), name="energy_field",
+            smooth_shading=bool(cfg.get("viewer.smooth_shading")), pickable=False,
             scalar_bar_args={"title": "Energia (MJ/m3)", "color": C["text"],
                              "vertical": True, "position_x": 0.02, "position_y": 0.12,
                              "width": 0.05, "height": 0.55, "n_labels": 5,
@@ -453,9 +551,10 @@ class Viewer3D(QObject):
         # Prioridad alta pero sin abortar el evento: el estilo de camara lo
         # sigue recibiendo, de modo que arrastrar con el izquierdo rota.
         iren.AddObserver("LeftButtonPressEvent", self._on_left_press, 10.0)
+        # Respaldo para los estilos que no capturan el foco del raton.
         iren.AddObserver("LeftButtonReleaseEvent", self._on_left_release, 10.0)
 
-        self.set_nav_mode(NavMode.ORBITA)
+        self.set_nav_mode(self._nav_mode)
         self._install_keys()
 
     def _interactor(self):
@@ -466,11 +565,12 @@ class Viewer3D(QObject):
 
     def _install_keys(self) -> None:
         """Atajos de camara sobre el propio visor."""
+        step = lambda: float(self.cfg.get("interaction.orbit_step"))
         bindings: Dict[str, Callable[[], None]] = {
-            "Up": lambda: self.orbit(0.0, 8.0),
-            "Down": lambda: self.orbit(0.0, -8.0),
-            "Left": lambda: self.orbit(-8.0, 0.0),
-            "Right": lambda: self.orbit(8.0, 0.0),
+            "Up": lambda: self.orbit(0.0, step()),
+            "Down": lambda: self.orbit(0.0, -step()),
+            "Left": lambda: self.orbit(-step(), 0.0),
+            "Right": lambda: self.orbit(step(), 0.0),
             "plus": lambda: self.dolly(1.15),
             "minus": lambda: self.dolly(1 / 1.15),
             "f": self.focus_on_selection,
@@ -488,12 +588,67 @@ class Viewer3D(QObject):
             except Exception:
                 pass
 
+    # -- restriccion de tornamesa -----------------------------------------
+    def _constrain_camera(self, *_args) -> None:
+        """Mantiene el eje Z arriba y acota la elevacion tras cada interaccion.
+
+        Sin esto, el estilo de VTK deja pasar la camara por encima del cenit y
+        el vector de vista se invierte: el modelo aparece de cabeza. Acotando la
+        elevacion y reanclando el eje Z, el giro se comporta como una tornamesa.
+        """
+        if not self._turntable:
+            return
+        try:
+            cam = self.plotter.renderer.camera
+        except Exception:
+            return
+
+        focal = np.array(cam.GetFocalPoint(), float)
+        pos = np.array(cam.GetPosition(), float)
+        d = pos - focal
+        radius = float(np.linalg.norm(d))
+        if radius < 1e-9:
+            return
+
+        limit = float(self.cfg.get("interaction.max_elevation"))
+        elevation = math.degrees(math.asin(float(np.clip(d[2] / radius, -1.0, 1.0))))
+        if abs(elevation) > limit:
+            target = math.copysign(limit, elevation)
+            horizontal = d[:2]
+            norm = float(np.linalg.norm(horizontal))
+            direction = horizontal / norm if norm > 1e-9 else np.array([0.0, -1.0])
+            cam.SetPosition(*(focal + np.array([
+                direction[0] * radius * math.cos(math.radians(target)),
+                direction[1] * radius * math.cos(math.radians(target)),
+                radius * math.sin(math.radians(target)),
+            ])))
+
+        # El vector de vista se calcula explicitamente en lugar de delegar en
+        # OrthogonalizeViewUp: VTK lo deja pendiente hasta la siguiente
+        # operacion de camara, y esa correccion diferida hacia saltar la imagen
+        # en cuanto el usuario tocaba la escena.
+        view = np.array(cam.GetFocalPoint(), float) - np.array(cam.GetPosition(), float)
+        length = float(np.linalg.norm(view))
+        if length < 1e-9:
+            return
+        view /= length
+        up = np.array([0.0, 0.0, 1.0]) - view * float(view[2])
+        norm_up = float(np.linalg.norm(up))
+        if norm_up < 1e-6:                       # mirando justo al cenit
+            up = np.array([0.0, 1.0, 0.0]) - view * float(view[1])
+            norm_up = float(np.linalg.norm(up)) or 1.0
+        cam.SetViewUp(*(up / norm_up))
+
     # -- estilo de navegacion ---------------------------------------------
     def set_nav_mode(self, mode: NavMode | str) -> None:
         """Cambia el estilo de interaccion de la camara."""
-        mode = NavMode(mode) if not isinstance(mode, NavMode) else mode
+        try:
+            mode = NavMode(mode) if not isinstance(mode, NavMode) else mode
+        except ValueError:
+            mode = NavMode.TORNAMESA
         self._nav_mode = mode
         p = self.plotter
+
         try:
             if mode is NavMode.TERRENO:
                 p.enable_terrain_style(mouse_wheel_zooms=True, shift_pans=True)
@@ -505,8 +660,9 @@ class Viewer3D(QObject):
                 self.view_top()
             else:
                 p.enable_trackball_style()
-            # Solo la vista en planta impone proyeccion ortografica; al salir
-            # de ella se recupera la que el usuario tenia elegida.
+
+            # Solo la vista en planta impone proyeccion ortografica; al salir de
+            # ella se recupera la que el usuario tenia elegida.
             if mode is not NavMode.PLANTA:
                 if self._user_parallel:
                     p.enable_parallel_projection()
@@ -514,7 +670,45 @@ class Viewer3D(QObject):
                     p.disable_parallel_projection()
         except Exception:
             pass
+
+        # La tornamesa es el estilo esferico con la camara reanclada tras cada
+        # movimiento; el terreno tambien conserva la vertical.
+        self._turntable = mode in (NavMode.TORNAMESA, NavMode.TERRENO)
+        self._attach_constraint()
+        if self._turntable:
+            self._constrain_camera()
+            self.plotter.render()
         self.status_message.emit(f"Navegacion: {mode.value}")
+
+    def _attach_constraint(self) -> None:
+        """Engancha al estilo vigente el corrector de camara y el fin de gesto.
+
+        Cambiar de modo de navegacion sustituye el estilo de VTK, asi que los
+        observadores hay que volver a colocarlos sobre el nuevo.
+        """
+        try:
+            style = self.plotter.iren.interactor.GetInteractorStyle()
+        except Exception:
+            return
+        if style is None or getattr(self, "_constraint_style", None) is style:
+            return
+        try:
+            style.AddObserver("InteractionEvent", self._constrain_camera, 5.0)
+            style.AddObserver("EndInteractionEvent", self._on_gesture_end, 5.0)
+            self._constraint_style = style
+        except Exception:
+            pass
+
+    def _on_gesture_end(self, _obj=None, _event=None) -> None:
+        """Cierra el gesto: resuelve el clic pendiente y luego corrige la camara.
+
+        El orden importa: la seleccion tiene que resolverse contra la vista que
+        el usuario tenia delante al pulsar, no contra la que quede despues de
+        reanclar la camara.
+        """
+        if self._left_down:
+            self._on_left_release()
+        self._constrain_camera()
 
     def nav_mode(self) -> NavMode:
         return self._nav_mode
@@ -539,28 +733,37 @@ class Viewer3D(QObject):
     # -- movimientos de camara --------------------------------------------
     def orbit(self, azimuth_deg: float = 0.0, elevation_deg: float = 0.0) -> None:
         """Gira la camara alrededor del punto focal, sin desplazarlo."""
+        speed = float(self.cfg.get("interaction.orbit_speed"))
+        if self.cfg.get("interaction.invert_y"):
+            elevation_deg = -elevation_deg
         cam = self.plotter.camera
         if azimuth_deg:
-            cam.Azimuth(azimuth_deg)
+            cam.Azimuth(azimuth_deg * speed)
         if elevation_deg:
-            cam.Elevation(elevation_deg)
+            cam.Elevation(elevation_deg * speed)
+        self._constrain_camera()
+        if not self._turntable:
             cam.OrthogonalizeViewUp()
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
 
     def roll(self, degrees: float) -> None:
+        if self._turntable:
+            self.status_message.emit(
+                "En modo tornamesa el encuadre queda anclado; use «Orbita libre» para rotarlo.")
+            return
         self.plotter.camera.Roll(degrees)
         self.plotter.render()
 
     def dolly(self, factor: float) -> None:
         """Acerca o aleja manteniendo el punto focal."""
-        self.plotter.camera.Zoom(factor)
+        speed = float(self.cfg.get("interaction.zoom_speed"))
+        self.plotter.camera.Zoom(1.0 + (factor - 1.0) * speed)
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
 
-    def set_spin(self, running: bool, speed_deg: float = 0.6) -> None:
+    def set_spin(self, running: bool) -> None:
         """Rotacion automatica continua alrededor del punto focal."""
-        self._spin_speed = speed_deg
         if running:
             self._spin_timer.start(33)
             self.status_message.emit("Rotacion automatica activada")
@@ -571,7 +774,8 @@ class Viewer3D(QObject):
         return self._spin_timer.isActive()
 
     def _spin_step(self) -> None:
-        self.plotter.camera.Azimuth(getattr(self, "_spin_speed", 0.6))
+        self.plotter.camera.Azimuth(float(self.cfg.get("interaction.spin_speed")))
+        self._constrain_camera()
         self.plotter.render()
 
     def focus_on_selection(self) -> None:
@@ -585,14 +789,13 @@ class Viewer3D(QObject):
         radius = max(float(np.linalg.norm(pts - center, axis=1).max()), 3.0)
 
         cam = self.plotter.camera
-        pos = np.array(cam.GetPosition(), float)
-        focal = np.array(cam.GetFocalPoint(), float)
-        direction = pos - focal
+        direction = np.array(cam.GetPosition(), float) - np.array(cam.GetFocalPoint(), float)
         norm = np.linalg.norm(direction)
         direction = direction / norm if norm > 1e-6 else np.array([1.0, -1.0, 0.8])
 
         cam.SetFocalPoint(*center)
         cam.SetPosition(*(center + direction * radius * 3.2))
+        self._constrain_camera()
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
         self.status_message.emit(
@@ -600,10 +803,12 @@ class Viewer3D(QObject):
 
     def reset_camera(self) -> None:
         self.plotter.reset_camera()
+        self._constrain_camera()
         self.plotter.render()
 
     def view_iso(self) -> None:
         self.plotter.view_isometric()
+        self._constrain_camera()
         self.plotter.render()
 
     def view_top(self) -> None:
@@ -637,10 +842,11 @@ class Viewer3D(QObject):
             return
         pts = np.vstack([[h.collar, h.toe] for h in holes]).reshape(-1, 3)
         pad = 4.0
-        bounds = (pts[:, 0].min() - pad, pts[:, 0].max() + pad,
-                  pts[:, 1].min() - pad, pts[:, 1].max() + pad,
-                  pts[:, 2].min() - pad, pts[:, 2].max() + pad)
-        self.plotter.reset_camera(bounds=bounds)
+        self.plotter.reset_camera(bounds=(
+            pts[:, 0].min() - pad, pts[:, 0].max() + pad,
+            pts[:, 1].min() - pad, pts[:, 1].max() + pad,
+            pts[:, 2].min() - pad, pts[:, 2].max() + pad))
+        self._constrain_camera()
         self.plotter.render()
 
     def screenshot(self, path: str, scale: int = 2) -> None:
@@ -649,41 +855,60 @@ class Viewer3D(QObject):
     # ------------------------------------------------------------------
     # Seleccion
     # ------------------------------------------------------------------
-    def _on_left_press(self, _obj, _event) -> None:
+    def _on_left_press(self, _obj=None, _event=None) -> None:
         iren = self._interactor()
         if iren is None:
             return
         self._press_pos = tuple(iren.GetEventPosition())
         self._press_time = time.monotonic()
+        self._left_down = True
 
-    def _on_left_release(self, _obj, _event) -> None:
+    def _on_left_release(self, _obj=None, _event=None) -> None:
+        """Decide si el gesto fue un giro o una seleccion."""
+        if not self._left_down:
+            return
+        self._left_down = False
+
         iren = self._interactor()
         if iren is None or not self._holes:
             return
         x, y = iren.GetEventPosition()
-        dx = x - self._press_pos[0]
-        dy = y - self._press_pos[1]
+        tolerance = int(self.cfg.get("interaction.drag_tolerance_px"))
+        dx, dy = x - self._press_pos[0], y - self._press_pos[1]
 
         # Si el puntero se movio, fue una rotacion: no se toca la seleccion.
-        if (dx * dx + dy * dy) > _CLICK_PIXEL_TOLERANCE ** 2:
+        if (dx * dx + dy * dy) > tolerance * tolerance:
+            self._last_click_time = 0.0
             return
-        if time.monotonic() - self._press_time > _CLICK_TIME_TOLERANCE:
+
+        now = time.monotonic()
+        gap_ms = (now - self._last_click_time) * 1000.0
+        near = (abs(x - self._last_click_pos[0]) <= tolerance * 2
+                and abs(y - self._last_click_pos[1]) <= tolerance * 2)
+        window_ms = float(self.cfg.get("interaction.double_click_ms"))
+        is_double = near and gap_ms <= window_ms
+        self._last_click_time = now
+        self._last_click_pos = (x, y)
+
+        needs_double = str(self.cfg.get("interaction.select_mode")) == "Doble clic"
+        if needs_double and not is_double:
             return
+
+        if is_double:
+            # El doble clic ya quedo resuelto: se corta la cadena para que la
+            # pulsacion que lo cierra no vuelva a evaluarse y deshaga lo hecho.
+            self._last_click_time = 0.0
 
         hid = self._pick_hole_at(x, y)
         additive = bool(iren.GetControlKey())
         toggle = bool(iren.GetShiftKey())
 
         if hid is None:
-            if not additive and not toggle:
+            just_selected = (now - self._last_select_time) * 1000.0 < window_ms
+            if (not additive and not toggle and not just_selected
+                    and self.cfg.get("interaction.clear_on_empty")):
                 self.clear_selection()
             return
-
-        now = time.monotonic()
-        if hid == self._last_click_hid and (now - self._last_click_time) < 0.35:
-            self.hole_activated.emit(hid)          # doble clic
-        self._last_click_hid = hid
-        self._last_click_time = now
 
         if toggle:
             selection = list(self._selection)
@@ -695,16 +920,31 @@ class Viewer3D(QObject):
         else:
             selection = [hid]
         self.set_selection(selection)
+        self._last_select_time = now
+
+        if is_double:
+            self.hole_activated.emit(hid)
+        elif self.cfg.get("interaction.focus_on_select"):
+            self.focus_on_selection()
 
     def _pick_hole_at(self, x: int, y: int) -> Optional[str]:
-        """Taladro bajo el cursor, o ``None`` si se hizo clic en el vacio."""
+        """Taladro bajo el cursor, o ``None`` si se hizo clic en el vacio.
+
+        Primero se prueba el picker de VTK sobre la geometria; si el cursor cayo
+        junto al taladro y no encima —los cilindros son delgados—, se recurre a
+        la distancia en pantalla, que es lo que hace que la seleccion se sienta
+        precisa sin exigir punteria.
+        """
+        # Los adornos de la escena estan marcados como no seleccionables, asi
+        # que lo que devuelva el picker pertenece siempre a un taladro.
         picker = vtk.vtkCellPicker()
         picker.SetTolerance(0.006)
         picker.Pick(x, y, 0, self.plotter.renderer)
-        if picker.GetActor() is None:
-            return None
-        point = np.array(picker.GetPickPosition(), float)
-        return self._nearest_hole(point)
+        if picker.GetActor() is not None:
+            hid = self._nearest_hole(np.array(picker.GetPickPosition(), float))
+            if hid is not None:
+                return hid
+        return self._nearest_hole_on_screen(x, y)
 
     def _nearest_hole(self, point: np.ndarray, max_distance: float = 4.0) -> Optional[str]:
         """Taladro cuyo eje pasa mas cerca del punto indicado."""
@@ -714,6 +954,29 @@ class Viewer3D(QObject):
             if d < best_d:
                 best_hid, best_d = h.hid, d
         return best_hid if best_d <= max_distance else None
+
+    def _nearest_hole_on_screen(self, x: int, y: int) -> Optional[str]:
+        """Taladro mas proximo al cursor medido en pixeles de pantalla.
+
+        Solo se consideran los puntos que estan delante de la camara: los de
+        detras se proyectan igualmente, pero a posiciones especulares que
+        seleccionarian un taladro que el usuario no puede ni ver.
+        """
+        radius = int(self.cfg.get("interaction.pick_radius_px"))
+        renderer = self.plotter.renderer
+        best_hid, best_d2 = None, float(radius * radius)
+
+        for h in self._holes:
+            for world in (h.collar, (h.collar + h.toe) / 2.0, h.toe):
+                renderer.SetWorldPoint(world[0], world[1], world[2], 1.0)
+                renderer.WorldToDisplay()
+                dx_, dy_, dz_ = renderer.GetDisplayPoint()
+                if not 0.0 <= dz_ <= 1.0:
+                    continue
+                d2 = (dx_ - x) ** 2 + (dy_ - y) ** 2
+                if d2 < best_d2:
+                    best_hid, best_d2 = h.hid, d2
+        return best_hid
 
     def set_selection(self, hids: Sequence[str], notify: bool = True) -> None:
         alive = {h.hid for h in self._holes}
@@ -756,18 +1019,24 @@ class Viewer3D(QObject):
             self.plotter.render()
             return
 
+        cfg = self.cfg
+        color = str(cfg.get("holes.selection_color"))
+        scale = float(cfg.get("holes.selection_scale"))
         holes = self.selected_holes()
-        lines = [pv.Tube(pointa=h.collar + np.array([0.0, 0.0, 1.8]), pointb=h.toe,
-                         radius=self._hole_radius(h) * 1.55, n_sides=18)
+
+        tubes = [pv.Tube(pointa=h.collar + np.array([0.0, 0.0, 1.8]), pointb=h.toe,
+                         radius=self._hole_radius(h) * scale, n_sides=18)
                  for h in holes]
-        if lines:
+        if tubes:
             self._actors["selection"] = self.plotter.add_mesh(
-                _merge(lines), color="#f0a202", opacity=0.45, name="selection",
-                smooth_shading=True)
-        tops = np.array([h.collar for h in holes], float)
+                _merge(tubes), color=color,
+                opacity=float(cfg.get("holes.selection_opacity")),
+                name="selection", pickable=False,
+                smooth_shading=bool(cfg.get("viewer.smooth_shading")))
         self._actors["selection_pts"] = self.plotter.add_mesh(
-            pv.PolyData(tops), color="#f0a202", point_size=13,
-            render_points_as_spheres=True, name="selection_pts")
+            pv.PolyData(np.array([h.collar for h in holes], float)), color=color,
+            point_size=int(cfg.get("holes.collar_size")) + 6,
+            render_points_as_spheres=True, name="selection_pts", pickable=False)
         self.plotter.render()
 
     # -- seleccion por ventana --------------------------------------------
@@ -809,7 +1078,9 @@ class Viewer3D(QObject):
             for world in (h.collar, (h.collar + h.toe) / 2.0):
                 renderer.SetWorldPoint(world[0], world[1], world[2], 1.0)
                 renderer.WorldToDisplay()
-                dx, dy, _dz = renderer.GetDisplayPoint()
+                dx, dy, dz = renderer.GetDisplayPoint()
+                if not 0.0 <= dz <= 1.0:
+                    continue          # detras de la camara
                 # VTK mide desde abajo; Qt desde arriba.
                 if rect.contains(QPoint(int(dx), int(height - dy))):
                     found.append(h.hid)
@@ -819,14 +1090,17 @@ class Viewer3D(QObject):
     # ------------------------------------------------------------------
     # Animacion de la secuencia
     # ------------------------------------------------------------------
-    def start_animation(self, speed: float = 1.0, fps: int = 30) -> None:
+    def start_animation(self, speed: Optional[float] = None) -> None:
         if not self._holes:
             return
-        self._anim_speed = max(speed, 0.01)
-        self._anim_end = max(h.delay_actual_ms for h in self._holes) + 220.0
+        cfg = self.cfg
+        fps = max(int(cfg.get("animation.fps")), 1)
+        rate = float(speed if speed is not None else cfg.get("animation.speed"))
+        self._anim_end = (max(h.delay_actual_ms for h in self._holes)
+                          + float(cfg.get("animation.tail_ms")))
         self._anim_t = 0.0
-        self._anim_step = 1000.0 / max(fps, 1) * self._anim_speed
-        self._timer.start(int(1000 / max(fps, 1)))
+        self._anim_step = 1000.0 / fps * max(rate, 0.01)
+        self._timer.start(int(1000 / fps))
 
     def stop_animation(self) -> None:
         self._timer.stop()
@@ -847,25 +1121,51 @@ class Viewer3D(QObject):
     def _paint_fired(self, t_ms: float) -> None:
         if not self._charge_meshes:
             return
+        flash = float(self.cfg.get("animation.flash_ms"))
         state = np.empty(len(self._charge_index), float)
         for k, idx in enumerate(self._charge_index):
             dt = t_ms - self._holes[idx].delay_actual_ms
-            state[k] = 0.0 if dt < 0 else (1.0 if dt < 120.0 else 0.5)
+            state[k] = 0.0 if dt < 0 else (1.0 if dt < flash else 0.5)
 
-        for key in list(self._actors):
-            if key.startswith("charge"):
-                self.plotter.remove_actor(self._actors[key], render=False)
-                del self._actors[key]
-        try:
-            self.plotter.remove_scalar_bar()
-        except Exception:
-            pass
-
-        mesh = _merge(self._charge_meshes, scalars=state, name="estado")
+        self._remove_charge_actors()
+        palette = [str(self.cfg.get("animation.color_pending")),
+                   str(self.cfg.get("animation.color_firing")),
+                   str(self.cfg.get("animation.color_fired"))]
         self._actors["charge"] = self.plotter.add_mesh(
-            mesh, scalars="estado", cmap=["#b4bdc6", "#f0a202", "#c0392b"],
-            clim=[0.0, 1.0], name="charge", show_scalar_bar=False, smooth_shading=True)
+            _merge(self._charge_meshes, scalars=state, name="estado"),
+            scalars="estado", cmap=palette, clim=[0.0, 1.0], name="charge",
+            show_scalar_bar=False,
+            smooth_shading=bool(self.cfg.get("viewer.smooth_shading")))
         self.plotter.render()
+
+    # ------------------------------------------------------------------
+    # Preferencias
+    # ------------------------------------------------------------------
+    #: Prefijos que obligan a reconstruir la escena entera.
+    _REBUILD_PREFIXES = ("holes.", "layers.", "viewer.")
+
+    def _on_setting_changed(self, key: str, value) -> None:
+        """Aplica en caliente los cambios de Preferencias que afectan al visor."""
+        if key == "interaction.nav_mode":
+            self.set_nav_mode(str(value))
+        elif key == "viewer.z_exaggeration":
+            self.set_z_exaggeration(float(value))
+        elif key.startswith("hole_colors."):
+            self.set_theme(self._theme)
+        elif key in ("viewer.background_top", "viewer.background_bottom", "viewer.gradient"):
+            self._setup_scene()
+            self.plotter.render()
+        elif key.startswith(self._REBUILD_PREFIXES):
+            self.rebuild()
+
+    def rebuild(self) -> None:
+        """Pide a la ventana que vuelva a dibujar la escena.
+
+        El visor no conoce la topografia ni la cara libre del proyecto, asi que
+        no puede reconstruirse solo: avisa y la ventana principal se encarga.
+        """
+        if self._holes:
+            self.scene_rebuild_requested.emit()
 
 
 # ---------------------------------------------------------------------------

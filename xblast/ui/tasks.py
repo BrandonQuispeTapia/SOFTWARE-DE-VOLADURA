@@ -69,10 +69,16 @@ class BackgroundTask(QObject):
 
 
 def analysis_task(design: BlastDesign, target_p80_cm: float,
-                  compute_energy: bool, parent: Optional[QObject] = None) -> BackgroundTask:
+                  compute_energy: bool = True,
+                  drilling_accuracy_m: float = 0.25,
+                  energy_cell_size: float = 1.2,
+                  parent: Optional[QObject] = None) -> BackgroundTask:
     """Tarea de analisis completo del diseno."""
     return BackgroundTask(
-        lambda: analyze(design, compute_energy=compute_energy, target_p80_cm=target_p80_cm),
+        lambda: analyze(design, compute_energy=compute_energy,
+                        target_p80_cm=target_p80_cm,
+                        drilling_accuracy_m=drilling_accuracy_m,
+                        energy_cell_size=energy_cell_size),
         parent)
 
 

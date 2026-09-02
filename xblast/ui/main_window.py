@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
-from PySide6.QtCore import QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QFileDialog, QLabel, QMainWindow, QMessageBox,
@@ -27,7 +27,10 @@ from ..core import timing as timing_core
 from ..core import pattern as pattern_mod
 from ..core.analysis import BlastAnalysis
 from ..core.charging import ChargeRule
-from ..core.models import BlastDesign, Hole, HoleType
+from ..core.models import (
+    BlastDesign, CostParams, Hole, HoleType, InitiationSystem, PatternParams,
+    RockMass, SiteConstraints, TimingParams,
+)
 from ..core.optimizer import Scenario
 from ..core.timing import timing_histogram
 from ..core.vibration import max_charge_for_ppv
@@ -39,6 +42,9 @@ from .panels import (
     ChargePanel, ConsolePanel, DesignPanel, ExplorerPanel, HoleTablePanel,
     OptimizePanel, PropertiesPanel, ResultsPanel, TimingPanel,
 )
+from .preferences import PreferencesDialog
+from .settings import settings as global_settings
+from . import theme
 from .theme import C
 from .viewer3d import NavMode, THEMES, Viewer3D
 from .viewer_bar import ViewerBar
@@ -64,7 +70,8 @@ class MainWindow(QMainWindow):
             | QMainWindow.DockOption.AllowTabbedDocks
             | QMainWindow.DockOption.AnimatedDocks)
 
-        self.design = BlastDesign(name="Voladura sin titulo")
+        self.cfg = global_settings()
+        self.design = self._design_from_settings()
         self.analysis: Optional[BlastAnalysis] = None
         self.project_path: Optional[Path] = None
         self._task = None
@@ -81,6 +88,8 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._build_statusbar()
         self._connect()
+        self.cfg.changed.connect(self._on_setting_changed)
+        self.cfg.bulk_changed.connect(self._on_settings_bulk_changed)
 
         QTimer.singleShot(120, self._bootstrap)
 
@@ -92,7 +101,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QVBoxLayout
 
         container = QWidget()
-        self.viewer = Viewer3D(container)
+        self.viewer = Viewer3D(container, store=self.cfg)
         self.viewer_bar = ViewerBar(container)
 
         lay = QVBoxLayout(container)
@@ -222,6 +231,8 @@ class MainWindow(QMainWindow):
         act("view_side", "Perfil lateral", "zoom", "Ctrl+4")
         act("reset_view", "Encuadrar", "reset", "Ctrl+0")
         act("reset_layout", "Restablecer paneles", "layers")
+        act("preferences", "Preferencias", "settings", "Ctrl+,",
+            "Personalizar apariencia, visor, interaccion, unidades y valores por defecto")
         act("about", "Acerca de X-BLAST", "info")
 
     def _build_toolbar(self) -> None:
@@ -276,6 +287,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_reset_view)
         tb.addSeparator()
         tb.addAction(self.act_export_report)
+        tb.addAction(self.act_preferences)
 
         spacer = QWidget()
         spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy().Expanding,
@@ -343,6 +355,8 @@ class MainWindow(QMainWindow):
             v.addAction(a)
         v.addSeparator()
         v.addAction(self.act_reset_layout)
+        v.addSeparator()
+        v.addAction(self.act_preferences)
 
         h = m.addMenu("A&yuda")
         h.addAction(self.act_about)
@@ -398,6 +412,8 @@ class MainWindow(QMainWindow):
         self.act_reset_view.triggered.connect(self.viewer.reset_camera)
         self.act_reset_layout.triggered.connect(self._reset_layout)
         self.act_about.triggered.connect(self._show_about)
+        self.act_preferences.triggered.connect(self.open_preferences)
+        self.viewer.scene_rebuild_requested.connect(self._refresh_scene)
 
         self.theme_combo.currentTextChanged.connect(self.viewer.set_theme)
 
@@ -609,8 +625,12 @@ class MainWindow(QMainWindow):
         charging.apply_charge(d.holes, self.charge_panel.rule())
         self._set_busy(True, "Analizando el diseno…")
         target = self.optimize_panel.target_p80.value()
-        self._task = tasks.analysis_task(copy.deepcopy(d), target,
-                                        compute_energy=True, parent=self)
+        self._task = tasks.analysis_task(
+            copy.deepcopy(d), target,
+            compute_energy=bool(self.cfg.get("energy.compute_on_analysis")),
+            drilling_accuracy_m=float(self.cfg.get("analysis.drilling_accuracy_m")),
+            energy_cell_size=float(self.cfg.get("energy.cell_size")),
+            parent=self)
         self._task.finished.connect(self._on_analysis_done)
         self._task.failed.connect(self._on_task_failed)
         self._task.start()
@@ -834,7 +854,8 @@ class MainWindow(QMainWindow):
     def new_project(self) -> None:
         if not self._confirm_discard():
             return
-        self.design = BlastDesign(name="Voladura sin titulo")
+        self.design = self._design_from_settings()
+        self.charge_panel.set_rule(self._charge_rule_from_settings())
         self.analysis = None
         self.project_path = None
         self.results_panel.update_results(None)
@@ -902,7 +923,7 @@ class MainWindow(QMainWindow):
         RecentProjectsManager.add_recent(self.project_path)
 
     def _confirm_discard(self) -> bool:
-        if not self._dirty:
+        if not self._dirty or not self.cfg.get("behavior.confirm_exit"):
             return True
         answer = QMessageBox.question(
             self, "Cambios sin guardar",
@@ -1101,11 +1122,12 @@ class MainWindow(QMainWindow):
         if self.design.holes:
             charging.apply_charge(self.design.holes, self.charge_panel.rule())
             self._refresh_scene()
-            self.run_analysis()
+            if self.cfg.get("behavior.auto_analyze"):
+                self.run_analysis()
 
     def _on_timing_changed(self) -> None:
         self._dirty = True
-        if self.design.holes:
+        if self.design.holes and self.cfg.get("behavior.auto_analyze"):
             self.run_analysis()
 
     # ------------------------------------------------------------------
@@ -1141,6 +1163,162 @@ class MainWindow(QMainWindow):
         self.dock_results.raise_()
         self.dock_console.raise_()
         self.log("Disposicion de paneles restablecida.", "INFO")
+
+    # ------------------------------------------------------------------
+    # Preferencias
+    # ------------------------------------------------------------------
+    def open_preferences(self, page: str = "") -> None:
+        """Abre el dialogo de preferencias."""
+        dialog = PreferencesDialog(self.cfg, self)
+        if page:
+            dialog.go_to(page)
+        dialog.exec()
+        self.cfg.save()
+
+    def _on_setting_changed(self, key: str, value) -> None:
+        """Aplica en caliente los cambios que no gestiona el visor."""
+        if key == "appearance.theme":
+            # Una paleta base reescribe los colores individuales, para que el
+            # dialogo muestre exactamente lo que se esta viendo. El aviso va en
+            # bloque: reestilar la aplicacion una vez por color seria absurdo.
+            self.cfg.update(theme.preset_values(str(value)))
+            self._apply_appearance()
+        elif key.startswith("appearance.") or key.startswith("charts.series_"):
+            self._apply_appearance()
+        elif key == "appearance.toolbar_style" or key == "appearance.icon_size":
+            self._apply_appearance()
+        elif key.startswith(("analysis.", "energy.")):
+            self.run_analysis()
+        elif key == "behavior.log_max_lines":
+            self.console.view.setMaximumBlockCount(int(value))
+        elif key == "interaction.show_hint_bar":
+            self.status_hint.setVisible(bool(value))
+
+    def _on_settings_bulk_changed(self, keys: List[str]) -> None:
+        """Reacciona una sola vez a un lote de preferencias."""
+        if any(k.startswith(("appearance.", "charts.series_")) for k in keys):
+            self._apply_appearance()
+        if any(k.startswith(("holes.", "layers.", "viewer.", "hole_colors."))
+               for k in keys):
+            self._refresh_scene()
+        if any(k.startswith(("analysis.", "energy.")) for k in keys):
+            self.run_analysis()
+
+    def _apply_appearance(self) -> None:
+        """Regenera la hoja de estilo y la tipografia de toda la aplicacion."""
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QFont
+
+        theme.apply_settings(self.cfg)
+        app = QApplication.instance()
+        if app is not None:
+            app.setFont(QFont(theme.FONT_FAMILY, theme.FONT_SIZE))
+            app.setStyleSheet(theme.stylesheet())
+
+        styles = {"Solo icono": Qt.ToolButtonStyle.ToolButtonIconOnly,
+                  "Icono y texto": Qt.ToolButtonStyle.ToolButtonTextBesideIcon,
+                  "Solo texto": Qt.ToolButtonStyle.ToolButtonTextOnly}
+        size = int(self.cfg.get("appearance.icon_size"))
+        for bar in self.findChildren(QToolBar):
+            bar.setToolButtonStyle(
+                styles.get(str(self.cfg.get("appearance.toolbar_style")),
+                           Qt.ToolButtonStyle.ToolButtonTextBesideIcon))
+            bar.setIconSize(QSize(size, size))
+        self._fix_dock_tabs()
+
+    # ------------------------------------------------------------------
+    # Valores por defecto
+    # ------------------------------------------------------------------
+    def _design_from_settings(self) -> BlastDesign:
+        """Diseno nuevo armado con los valores por defecto del usuario."""
+        g = self.cfg.get
+        design = BlastDesign(
+            name="Voladura sin titulo",
+            author=str(g("reports.author")),
+            site=str(g("reports.company")),
+            pattern=PatternParams(
+                burden_m=float(g("design.burden_m")),
+                spacing_m=float(g("design.spacing_m")),
+                diameter_mm=float(g("design.diameter_mm")),
+                bench_height_m=float(g("design.bench_height_m")),
+                subdrill_m=float(g("design.subdrill_m")),
+                stemming_m=float(g("design.stemming_m")),
+                inclination_deg=float(g("design.inclination_deg")),
+                face_azimuth_deg=float(g("design.face_azimuth_deg")),
+                rows=int(g("design.rows")),
+                cols=int(g("design.cols")),
+                pattern=str(g("design.pattern")),
+            ),
+            rock=RockMass(
+                name=str(g("design.rock_name")),
+                density_t_m3=float(g("design.rock_density")),
+                ucs_mpa=float(g("design.rock_ucs")),
+                young_gpa=float(g("design.rock_young")),
+                poisson=float(g("design.rock_poisson")),
+                gsi=int(g("design.rock_gsi")),
+                p_wave_m_s=float(g("design.rock_vp")),
+                rmd=float(g("design.rock_rmd")),
+                jps=float(g("design.rock_jps")),
+                jpa=float(g("design.rock_jpa")),
+            ),
+            timing=TimingParams(
+                system=str(g("design.initiation")),
+                hole_delay_ms=float(g("design.hole_delay_ms")),
+                row_delay_ms=float(g("design.row_delay_ms")),
+                in_hole_delay_ms=float(g("design.in_hole_delay_ms")),
+                pattern=str(g("design.tie_pattern")),
+                echelon_deg=float(g("design.echelon_deg")),
+                cooperation_window_ms=float(g("analysis.cooperation_window_ms")),
+            ),
+            constraints=SiteConstraints(
+                receptor_easting=float(g("limits.receptor_easting")),
+                receptor_northing=float(g("limits.receptor_northing")),
+                receptor_elev=float(g("limits.receptor_elev")),
+                ppv_limit_mm_s=float(g("limits.ppv_limit")),
+                airblast_limit_db=float(g("limits.airblast_limit")),
+                exclusion_radius_m=float(g("limits.exclusion_radius")),
+                k_site=float(g("limits.k_site")),
+                beta_site=float(g("limits.beta_site")),
+                alpha_site=float(g("limits.alpha_site")),
+            ),
+            costs=CostParams(
+                drilling_usd_m=float(g("costs.drilling_usd_m")),
+                detonator_usd_unit=float(g("costs.detonator_usd_unit")),
+                surface_connector_usd_unit=float(g("costs.connector_usd_unit")),
+                labor_usd_hole=float(g("costs.labor_usd_hole")),
+                loading_usd_t=float(g("costs.loading_usd_t")),
+                hauling_usd_t=float(g("costs.hauling_usd_t")),
+                crushing_usd_t=float(g("costs.crushing_usd_t")),
+                secondary_breakage_usd_t=float(g("costs.secondary_usd_t")),
+                reference_x50_cm=float(g("costs.reference_x50_cm")),
+                oversize_threshold_cm=float(g("analysis.oversize_cm")),
+            ),
+            column_explosive=str(g("design.column_explosive")),
+            bottom_explosive=(str(g("design.bottom_explosive"))
+                              if g("design.use_bottom_charge") else None),
+            bottom_charge_m=float(g("design.bottom_charge_m")),
+            primer_type=str(g("design.primer_type")),
+            stemming_material=str(g("design.stemming_material")),
+        )
+        return design
+
+    def _charge_rule_from_settings(self) -> ChargeRule:
+        """Regla de carguio inicial segun las preferencias."""
+        g = self.cfg.get
+        return ChargeRule(
+            column_explosive=str(g("design.column_explosive")),
+            bottom_explosive=(str(g("design.bottom_explosive"))
+                              if g("design.use_bottom_charge") else None),
+            bottom_charge_m=float(g("design.bottom_charge_m")),
+            stemming_m=float(g("design.stemming_m")),
+            coupling=float(g("design.coupling")),
+            n_decks=int(g("design.n_decks")),
+            inter_deck_stem_m=float(g("design.inter_deck_stem_m")),
+            air_deck_m=float(g("design.air_deck_m")),
+            primer_per_deck=int(g("design.primer_per_deck")),
+            primer_type=str(g("design.primer_type")),
+            stemming_material=str(g("design.stemming_material")),
+        )
 
     def _show_about(self) -> None:
         QMessageBox.about(

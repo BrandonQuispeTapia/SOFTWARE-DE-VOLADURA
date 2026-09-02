@@ -136,7 +136,9 @@ class TemplateCard(QFrame):
         super().__init__(parent)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFixedHeight(175)
+        # Alto minimo en vez de fijo: las descripciones se ajustan solas y no
+        # quedan cortadas a media frase.
+        self.setMinimumHeight(196)
 
         self.setStyleSheet(f"""
             QFrame {{
@@ -208,14 +210,17 @@ class TemplateCard(QFrame):
         # Descripción
         desc_lbl = QLabel(description)
         desc_lbl.setWordWrap(True)
+        desc_lbl.setSizePolicy(QSizePolicy.Policy.Preferred,
+                               QSizePolicy.Policy.MinimumExpanding)
         desc_lbl.setStyleSheet("""
             color: #64748B;
             font-size: 8.5pt;
             border: none;
             background: transparent;
         """)
-        layout.addWidget(desc_lbl)
-        layout.addStretch(1)
+        # La descripcion se queda con el espacio sobrante: un estirador al final
+        # la dejaria con su alto minimo y el texto salia cortado.
+        layout.addWidget(desc_lbl, 1)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -616,9 +621,15 @@ class StartWindow(QMainWindow):
         tips_row = QHBoxLayout()
         tips_row.setSpacing(16)
 
-        tip1 = self._make_tip_box("🚀 Navegación 3D", "Orbitar con botón izquierdo, acercar con rueda y seleccionar taladros individuales con clic.")
-        tip2 = self._make_tip_box("💥 Cargas por Plataformas", "Editor interactivo de deck: gestiona columnas de taco, carga intermedia y cebado.")
-        tip3 = self._make_tip_box("📊 Análisis Kuz-Ram", "Distribución granulométrica P80, predicción de vibraciones y cálculo de costos $/t.")
+        tip1 = self._make_tip_box(
+            "cube", "Navegación 3D",
+            "Arrastre con el botón izquierdo para girar, rueda para acercar y doble clic para seleccionar un taladro.")
+        tip2 = self._make_tip_box(
+            "charge", "Carga por plataformas",
+            "Editor de columna taladro por taladro: taco, carga de fondo, cámaras de aire y cebado.")
+        tip3 = self._make_tip_box(
+            "analysis", "Análisis completo",
+            "Fragmentación Kuz-Ram y Swebrec, vibraciones, onda aérea, proyección y costo por tonelada.")
 
         tips_row.addWidget(tip1)
         tips_row.addWidget(tip2)
@@ -628,7 +639,8 @@ class StartWindow(QMainWindow):
         scroll.setWidget(content)
         return scroll
 
-    def _make_tip_box(self, title: str, text: str) -> QWidget:
+    def _make_tip_box(self, icon_name: str, title: str, text: str) -> QWidget:
+        """Tarjeta de consejo con icono vectorial, sin depender de emojis."""
         box = QFrame()
         box.setStyleSheet("""
             QFrame {
@@ -640,13 +652,25 @@ class StartWindow(QMainWindow):
         """)
         lay = QVBoxLayout(box)
         lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(4)
+        lay.setSpacing(5)
+
+        head = QHBoxLayout()
+        head.setSpacing(7)
+        glyph = QLabel()
+        glyph.setPixmap(icons.pixmap(icon_name, 17, "#1668b3"))
+        glyph.setFixedWidth(19)
+        glyph.setStyleSheet("background: transparent; border: none;")
+        head.addWidget(glyph)
+
         t = QLabel(title)
-        t.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #0F172A;")
+        t.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #0F172A; background: transparent; border: none;")
+        head.addWidget(t)
+        head.addStretch(1)
+        lay.addLayout(head)
+
         d = QLabel(text)
         d.setWordWrap(True)
-        d.setStyleSheet("font-size: 8pt; color: #64748B;")
-        lay.addWidget(t)
+        d.setStyleSheet("font-size: 8pt; color: #64748B; background: transparent; border: none;")
         lay.addWidget(d)
         return box
 
@@ -662,7 +686,8 @@ class StartWindow(QMainWindow):
         header.addWidget(title)
         header.addStretch(1)
 
-        btn_back = QPushButton("← Volver a Inicio")
+        btn_back = QPushButton("Volver a Inicio")
+        btn_back.setIcon(icons.icon("left", 15))
         btn_back.setStyleSheet("""
             QPushButton {
                 background-color: #F1F5F9;

@@ -86,6 +86,10 @@ def button(text: str, variant: str = "", icon_name: str = "") -> QPushButton:
     b = QPushButton(text)
     if variant:
         b.setProperty("variant", variant)
+        # Qt no reevalua los selectores por propiedad de un widget ya estilizado:
+        # sin este repintado la variante se aplica a medias.
+        b.style().unpolish(b)
+        b.style().polish(b)
     if icon_name:
         color = C["text_on_accent"] if variant == "primary" else None
         b.setIcon(icons.icon(icon_name, 16, color))

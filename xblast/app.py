@@ -24,7 +24,8 @@ def main() -> int:
     from xblast.ui import icons
     from xblast.ui.main_window import MainWindow
     from xblast.ui.start_page import StartWindow
-    from xblast.ui.theme import FONT_FAMILY, FONT_SIZE, stylesheet
+    from xblast.ui import theme
+    from xblast.ui.settings import settings as global_settings
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
@@ -32,8 +33,12 @@ def main() -> int:
     app.setApplicationVersion(__version__)
     app.setOrganizationName("UNA Puno - FIM")
     app.setStyle("Fusion")
-    app.setFont(QFont(FONT_FAMILY, FONT_SIZE))
-    app.setStyleSheet(stylesheet())
+
+    # Las preferencias del usuario mandan sobre la paleta y la tipografia.
+    store = global_settings()
+    theme.apply_settings(store)
+    app.setFont(QFont(theme.FONT_FAMILY, theme.FONT_SIZE))
+    app.setStyleSheet(theme.stylesheet())
     app.setWindowIcon(icons.app_icon())
 
     active_windows: list[object] = []
@@ -45,7 +50,13 @@ def main() -> int:
         active_windows.append(window)
         return app.exec()
 
-    # Por defecto, mostrar la página de inicio minimalista
+    # La pagina de inicio se puede desactivar desde Preferencias.
+    if not store.get("behavior.show_start_page"):
+        window = MainWindow()
+        window.show()
+        active_windows.append(window)
+        return app.exec()
+
     start_page = StartWindow()
 
     def _on_project_selected(mode: str, path: str):
