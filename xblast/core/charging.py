@@ -100,11 +100,84 @@ def build_column(hole: Hole, rule: ChargeRule) -> List[Deck]:
     return decks
 
 
-def apply_charge(holes: Sequence[Hole], rule: ChargeRule) -> None:
-    """Aplica la regla de carguio y actualiza masa y energia de cada taladro."""
+def apply_charge(holes: Sequence[Hole], rule: ChargeRule,
+                 force: bool = False) -> int:
+    """Aplica la regla de carguio y actualiza masa y energia de cada taladro.
+
+    Los taladros marcados con ``charge_locked`` conservan su columna: son los
+    que el usuario edito a mano y la regla global no debe pisar. Con
+    ``force`` se recargan tambien esos y se les quita el bloqueo.
+
+    Returns:
+        Numero de taladros efectivamente recargados.
+    """
+    changed = 0
     for h in holes:
+        if h.charge_locked and not force:
+            refresh_hole_charge(h)
+            continue
         h.decks = build_column(h, rule)
+        h.charge_locked = False
         refresh_hole_charge(h)
+        changed += 1
+    return changed
+
+
+def set_column(hole: Hole, decks: List[Deck], autofit: bool = True) -> None:
+    """Reemplaza la columna de un taladro recolocando las plataformas.
+
+    Las plataformas llegan ordenadas del fondo al collar; aqui se recalcula
+    su distancia al fondo y, con ``autofit``, se ajusta el taco de collar
+    para que la columna ocupe exactamente la longitud perforada. El taladro
+    queda marcado como editado a mano.
+    """
+    cursor = 0.0
+    clean: List[Deck] = []
+    for d in decks:
+        length = round(max(float(d.length_m), 0.0), 3)
+        if length <= 1e-6:
+            continue
+        d.length_m = length
+        d.from_toe_m = round(cursor, 3)
+        clean.append(d)
+        cursor += length
+
+    if autofit and clean:
+        gap = round(hole.length_m - cursor, 3)
+        if abs(gap) > 0.01:
+            top = clean[-1]
+            if top.kind is DeckKind.TACO and top.length_m + gap > 0.05:
+                top.length_m = round(top.length_m + gap, 3)
+            elif gap > 0.05:
+                clean.append(Deck(DeckKind.TACO, gap, None, 1.0, 0, round(cursor, 3)))
+            else:
+                _trim_from_top(clean, -gap)
+            cursor = 0.0
+            for d in clean:
+                d.from_toe_m = round(cursor, 3)
+                cursor += d.length_m
+
+    hole.decks = clean
+    hole.charge_locked = True
+    refresh_hole_charge(hole)
+
+
+def _trim_from_top(decks: List[Deck], excess: float) -> None:
+    """Recorta el exceso de longitud empezando por el collar."""
+    for d in reversed(decks):
+        if excess <= 1e-6:
+            return
+        take = min(d.length_m - 0.05, excess)
+        if take > 0:
+            d.length_m = round(d.length_m - take, 3)
+            excess -= take
+
+
+def unlock_charge(holes: Sequence[Hole], rule: ChargeRule) -> int:
+    """Devuelve los taladros indicados a la regla global de carguio."""
+    for h in holes:
+        h.charge_locked = False
+    return apply_charge(holes, rule)
 
 
 def refresh_hole_charge(hole: Hole) -> None:

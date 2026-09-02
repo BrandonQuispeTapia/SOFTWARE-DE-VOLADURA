@@ -19,7 +19,7 @@ from xblast.core import timing as timing_mod
 from xblast.core import airblast, vibration
 from xblast.core.analysis import analyze
 from xblast.core.charging import ChargeRule
-from xblast.core.models import BlastDesign, DeckKind, PatternParams, RockMass
+from xblast.core.models import BlastDesign, Deck, DeckKind, PatternParams, RockMass
 
 
 @pytest.fixture
@@ -287,3 +287,94 @@ def test_empty_design_analysis_is_safe():
     a = analyze(BlastDesign())
     assert a.kpis == {}
     assert a.findings == []
+
+
+# ---------------------------------------------------------------------------
+# Edicion manual por taladro
+# ---------------------------------------------------------------------------
+
+
+def test_manual_column_fills_the_hole(design: BlastDesign):
+    from xblast.core.models import Deck
+
+    hole = design.holes[0]
+    charging.set_column(hole, [
+        Deck(DeckKind.CARGA, 4.0, "ANFO", 1.0, 1),
+        Deck(DeckKind.AIRE, 1.0),
+        Deck(DeckKind.CARGA, 2.0, "Emulsion Gasificada 1.15", 1.0, 1),
+        Deck(DeckKind.TACO, 1.0),
+    ])
+    total = sum(d.length_m for d in hole.decks)
+    assert total == pytest.approx(hole.length_m, abs=0.05)
+    assert hole.decks[-1].kind is DeckKind.TACO       # el ajuste va al collar
+    assert hole.charge_kg > 0
+    assert hole.charge_locked
+
+
+def test_manual_column_is_ordered_from_the_toe(design: BlastDesign):
+    from xblast.core.models import Deck
+
+    hole = design.holes[0]
+    charging.set_column(hole, [Deck(DeckKind.CARGA, 5.0, "ANFO", 1.0, 1),
+                               Deck(DeckKind.TACO, 3.0)])
+    offsets = [d.from_toe_m for d in hole.decks]
+    assert offsets == sorted(offsets)
+    assert hole.decks[0].from_toe_m == pytest.approx(0.0)
+
+
+def test_global_rule_respects_manual_charges(design: BlastDesign):
+    rule = ChargeRule(stemming_m=design.pattern.stemming_m)
+    manual = design.holes[3]
+    charging.set_column(manual, [Deck(DeckKind.CARGA, 6.0, "ANFO", 1.0, 1)])
+    manual_kg = manual.charge_kg
+
+    recharged = charging.apply_charge(design.holes, rule)
+    assert recharged == len(design.holes) - 1
+    assert manual.charge_kg == pytest.approx(manual_kg)
+
+    charging.apply_charge(design.holes, rule, force=True)
+    assert not manual.charge_locked
+
+
+def test_unlock_charge_returns_holes_to_the_rule(design: BlastDesign):
+    from xblast.core.models import Deck
+
+    rule = ChargeRule(stemming_m=design.pattern.stemming_m)
+    hole = design.holes[5]
+    charging.set_column(hole, [Deck(DeckKind.CARGA, 2.0, "ANFO", 1.0, 1)])
+    assert hole.charge_locked
+
+    charging.unlock_charge([hole], rule)
+    assert not hole.charge_locked
+    assert hole.collar_stemming_m == pytest.approx(rule.stemming_m, abs=0.05)
+
+
+def test_locked_delay_survives_retiming(design: BlastDesign):
+    hole = design.holes[7]
+    hole.delay_ms = 999.0
+    hole.delay_locked = True
+
+    timing_mod.assign_delays(design.holes, design.timing,
+                             design.pattern.face_azimuth_deg)
+    assert hole.delay_ms == pytest.approx(999.0)
+    assert any(h.delay_ms != 999.0 for h in design.holes if h is not hole)
+
+    freed = timing_mod.clear_delay_locks(design.holes)
+    assert freed == 1
+    timing_mod.assign_delays(design.holes, design.timing,
+                             design.pattern.face_azimuth_deg)
+    assert hole.delay_ms != pytest.approx(999.0)
+
+
+def test_manual_edits_survive_a_full_analysis(design: BlastDesign):
+    from xblast.core.models import Deck
+
+    hole = design.holes[9]
+    charging.set_column(hole, [Deck(DeckKind.CARGA, 7.0, "ANFO", 1.0, 2)])
+    hole.hole_type = "Precorte"
+    expected = hole.charge_kg
+
+    a = analyze(design, compute_energy=False)
+    assert hole.charge_kg == pytest.approx(expected)
+    assert hole.hole_type == "Precorte"
+    assert a.kpis["charge_kg"] > 0

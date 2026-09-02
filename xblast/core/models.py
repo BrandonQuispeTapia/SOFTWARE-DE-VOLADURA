@@ -243,6 +243,8 @@ class Hole:
     row: int = 0
     col: int = 0
     delay_ms: float = 0.0
+    delay_locked: bool = False    # retardo fijado a mano
+    charge_locked: bool = False   # carga editada a mano, no la pisa la regla global
     delay_actual_ms: float = 0.0   # con dispersion del sistema de iniciacion
 
     # resultados calculados por el motor

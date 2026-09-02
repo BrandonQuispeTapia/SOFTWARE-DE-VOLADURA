@@ -2,6 +2,7 @@
 
 from .charge import ChargePanel
 from .console import ConsolePanel, HoleTablePanel
+from .deck_editor import DeckEditor
 from .design import DesignPanel
 from .explorer import ExplorerPanel
 from .optimize import OptimizePanel
@@ -10,7 +11,7 @@ from .results import ResultsPanel
 from .timing import TimingPanel
 
 __all__ = [
-    "ChargePanel", "ConsolePanel", "HoleTablePanel", "DesignPanel",
+    "ChargePanel", "ConsolePanel", "HoleTablePanel", "DeckEditor", "DesignPanel",
     "ExplorerPanel", "OptimizePanel", "PropertiesPanel", "ResultsPanel",
     "TimingPanel",
 ]

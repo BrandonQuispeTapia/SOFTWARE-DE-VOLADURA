@@ -18,7 +18,7 @@ para reconocer la interfaz antes de cargar datos propios.
 | --- | --- |
 | **Izquierda, arriba** | Explorador de capas: enciende y apaga taladros, cargas, etiquetas, topografía, cara libre, piso de banco y campo de energía. Debajo, el listado de taladros por tipo. |
 | **Izquierda, abajo** | Pestañas **Diseño** (geometría, macizo, entorno), **Carga** y **Secuencia**. |
-| **Centro** | Visor 3D. Rueda para acercar, arrastre para rotar, clic derecho arrastrando para desplazar. |
+| **Centro** | Visor 3D con su barra de cámara y selección. |
 | **Derecha** | Pestañas **Resultados**, **Propiedades** del taladro seleccionado y **Optimización**. |
 | **Abajo** | **Bitácora** de la sesión y **Tabla** completa de taladros. |
 
@@ -27,7 +27,55 @@ cerrar. `Ver ▸ Restablecer paneles` vuelve a la disposición original.
 
 ---
 
-## 2. Definir el macizo rocoso
+## 2. Moverse por el visor
+
+### Ratón
+
+| Acción | Resultado |
+| --- | --- |
+| Arrastrar con el izquierdo | Girar alrededor del punto focal |
+| Rueda | Acercar y alejar |
+| Botón central, o Shift + izquierdo | Desplazar |
+| Ctrl + izquierdo | Rotar el encuadre |
+| Botón derecho arrastrando | Zoom continuo |
+| Clic sin arrastrar | Seleccionar el taladro bajo el cursor |
+| Ctrl + clic | Agregar a la selección |
+| Shift + clic | Alternar ese taladro en la selección |
+| Doble clic | Centrar el giro en ese taladro |
+
+Girar y seleccionar comparten el botón izquierdo. El programa distingue el
+clic del arrastre por lo que se desplaza el puntero, así que no hay que
+cambiar de herramienta para pasar de una cosa a la otra.
+
+### Barra del visor
+
+| Control | Para qué sirve |
+| --- | --- |
+| **Navegación** | *Órbita libre* gira sin restricción. *Terreno* mantiene el eje Z vertical, que es lo cómodo en banco. *Joystick* sigue moviendo mientras el botón siga pulsado. *Planta 2D* deja solo desplazamiento y zoom, con proyección ortográfica. |
+| **Vista** | Isométrica, planta y las cuatro ortogonales por punto cardinal. |
+| **Proyección** | Alterna entre perspectiva y ortográfica; la ortográfica es la que sirve para medir sobre el plano. |
+| **Girar** | Las flechas orbitan alrededor del punto focal —el modelo no se mueve, la cámara sí—, y las dos curvas rotan el encuadre. Mantener pulsado repite el giro. |
+| **Rotación automática** | Giro continuo, útil para revisar la malla sin manos o para grabar. |
+| **Encuadrar todo / Encuadrar la selección** | Ajusta la cámara a todo el disparo o solo a lo seleccionado. |
+| **Centrar el giro en la selección** | Mueve el punto focal al taladro elegido. A partir de ahí el visor gira **alrededor de ese taladro**, que es la forma de inspeccionarlo por todos lados sin perderlo de vista. |
+| **Selección por ventana** | Encierra varios taladros con un rectángulo. Ctrl agrega, Shift quita, Esc cancela. |
+| **Escala Z** | Exagera la vertical hasta 5x, para leer bancos bajos o taludes tendidos. |
+
+### Teclado sobre el visor
+
+| Tecla | Acción |
+| --- | --- |
+| Flechas | Girar |
+| `+` / `−` | Acercar y alejar |
+| `F` | Centrar el giro en la selección |
+| `R` | Encuadrar todo |
+| `1` … `4` | Isométrica, planta, norte, este |
+| `P` | Perspectiva u ortográfica |
+| `Esc` | Quitar la selección |
+
+---
+
+## 3. Definir el macizo rocoso
 
 **Diseño ▸ Macizo.** Es el primer paso: el factor de roca condiciona todo lo
 demás.
@@ -44,7 +92,7 @@ muy dura.
 
 ---
 
-## 3. Geometría de la malla
+## 4. Geometría de la malla
 
 **Diseño ▸ Geometría.**
 
@@ -64,7 +112,7 @@ Pulse **Generar malla** (o `F5`).
 
 ---
 
-## 4. Diseño de carga
+## 5. Diseño de carga
 
 **Carga.** Los cambios se reflejan de inmediato en el esquema de la columna y
 en el resumen del taladro tipo.
@@ -82,7 +130,7 @@ en el resumen del taladro tipo.
 
 ---
 
-## 5. Secuencia de salida
+## 6. Secuencia de salida
 
 **Secuencia.**
 
@@ -101,7 +149,7 @@ en el resumen del taladro tipo.
 
 ---
 
-## 6. Entorno y límites
+## 7. Entorno y límites
 
 **Diseño ▸ Entorno.**
 
@@ -115,7 +163,7 @@ en el resumen del taladro tipo.
 
 ---
 
-## 7. Analizar
+## 8. Analizar
 
 Pulse **Analizar** (`F6`). El cálculo corre en segundo plano.
 
@@ -142,7 +190,7 @@ Desglose por concepto y reparto entre perforación-voladura y aguas abajo.
 
 ---
 
-## 8. Tematizar el visor
+## 9. Tematizar el visor
 
 El desplegable **Tematizar por** de la barra de herramientas colorea la malla
 según la variable elegida:
@@ -161,7 +209,72 @@ zonas frías son las que dejarán bolones y lomos.
 
 ---
 
-## 9. Optimizar
+## 10. Intervenir taladro por taladro
+
+El panel **Propiedades** no es una ficha de consulta: es donde se edita el
+taladro. Se abre al hacer clic sobre uno en el visor, en la tabla o en el
+explorador.
+
+### Clasificación
+
+El desplegable **Tipo** cambia producción, precorte, recorte, amortiguado,
+alivio, rainura o contorno. Cambia el color en el visor y las reglas de
+revisión que se aplican. Con varios taladros seleccionados, **Aplicar tipo a
+la selección** los reclasifica todos de una vez — que es como se marcan las
+filas de precorte o los taladros amortiguados del contorno.
+
+La misma operación está en la barra superior (*Asignar tipo*) y en el menú
+**Selección ▸ Seleccionar por tipo**, que selecciona de golpe todos los
+taladros de una clase.
+
+### Geometría
+
+Diámetro, longitud, subperforación, inclinación, azimut, cota de collar y
+coordenadas se editan directamente. Sirve para corregir un taladro que salió
+distinto en campo sin rehacer la malla completa.
+
+### Retardo
+
+Al escribir un retardo, ese taladro queda **fijado a mano** y el amarre
+automático deja de recalcularlo. **Selección ▸ Liberar retardos fijados** lo
+devuelve al patrón.
+
+### Columna de carga
+
+El editor muestra la columna real del taladro, del collar hacia el fondo. Cada
+plataforma tiene su tipo —carga, taco o cámara de aire—, su longitud y, si es
+carga, su producto, su acoplamiento y sus cebos. Debajo de cada una aparecen
+la densidad lineal, los kilos y la presión sobre la pared.
+
+- **Carga / Taco / Aire** agregan una plataforma por el collar.
+- Las flechas mueven la plataforma hacia el collar o hacia el fondo.
+- La línea de estado avisa si la columna no llena el taladro; el ajuste se
+  hace sobre el taco de collar.
+
+Editar la columna **desvincula el taladro de la regla global**: el panel de
+Carga ya no lo pisa, y la tabla lo marca en la columna *Carga manual*.
+
+- **Copiar a la selección** replica esa columna sobre todos los taladros
+  seleccionados.
+- **Volver a la regla global** descarta la carga manual y los recarga con el
+  panel de Carga.
+
+### Selección
+
+| Cómo | Dónde |
+| --- | --- |
+| Clic, Ctrl + clic, Shift + clic | Visor 3D |
+| Rectángulo | Botón de selección por ventana, o tecla `B` |
+| Filas contiguas o sueltas | Tabla de taladros, con Shift y Ctrl |
+| Todos los de una clase | Menú Selección ▸ Seleccionar por tipo |
+| Todo, invertir, ninguno | `Ctrl+A`, `Ctrl+Shift+I`, `Ctrl+D` |
+
+La selección es la misma en el visor, en la tabla y en el panel de
+propiedades: lo que se marca en uno se refleja en los otros.
+
+---
+
+## 11. Optimizar
 
 **Optimización** (`F7`) explora variaciones de burden y relación S/B alrededor
 del diseño actual, manteniendo constante el área volada para que la
@@ -181,7 +294,7 @@ regenera la malla.
 
 ---
 
-## 10. Importar datos reales
+## 12. Importar datos reales
 
 ### Taladros
 **Importar taladros** (`Ctrl+I`) acepta tanto un CSV de collares
@@ -199,7 +312,7 @@ El formato completo está en [FORMATO_DATOS.md](FORMATO_DATOS.md).
 
 ---
 
-## 11. Entregables
+## 13. Entregables
 
 | Acción | Resultado |
 | --- | --- |
@@ -210,7 +323,7 @@ El formato completo está en [FORMATO_DATOS.md](FORMATO_DATOS.md).
 
 ---
 
-## 12. Antes de usarlo en producción
+## 14. Antes de usarlo en producción
 
 Los modelos son predictivos y traen constantes genéricas. Calíbrelos con datos
 de su yacimiento:
@@ -241,3 +354,9 @@ de su yacimiento:
 | `Ctrl+I` | Importar taladros |
 | `Ctrl+R` | Reporte técnico |
 | `Ctrl+Alt+1` … `Ctrl+Alt+9` | Mostrar u ocultar cada panel |
+| `Ctrl+A` · `Ctrl+D` · `Ctrl+Shift+I` | Seleccionar todo · quitar selección · invertir |
+| `B` | Selección por ventana |
+
+Con el foco en el visor: flechas para girar, `+` y `−` para acercar, `F`
+centrar el giro en la selección, `R` encuadrar, `P` proyección, `Esc`
+deseleccionar.

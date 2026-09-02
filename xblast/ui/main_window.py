@@ -23,10 +23,11 @@ from PySide6.QtWidgets import (
 
 from .. import __appname__, __tagline__, __version__
 from ..core import charging, explosives as exdb
+from ..core import timing as timing_core
 from ..core import pattern as pattern_mod
 from ..core.analysis import BlastAnalysis
 from ..core.charging import ChargeRule
-from ..core.models import BlastDesign, Hole
+from ..core.models import BlastDesign, Hole, HoleType
 from ..core.optimizer import Scenario
 from ..core.timing import timing_histogram
 from ..core.vibration import max_charge_for_ppv
@@ -39,7 +40,8 @@ from .panels import (
     OptimizePanel, PropertiesPanel, ResultsPanel, TimingPanel,
 )
 from .theme import C
-from .viewer3d import THEMES, Viewer3D
+from .viewer3d import NavMode, THEMES, Viewer3D
+from .viewer_bar import ViewerBar
 
 DATA_DIRS = ("data", ".", "..", "../data")
 
@@ -65,6 +67,7 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._analysis_queued = False
         self._refreshing = False
+        self._syncing_selection = False
 
         self._build_viewer()
         self._build_panels()
@@ -80,12 +83,18 @@ class MainWindow(QMainWindow):
     # Construccion
     # ------------------------------------------------------------------
     def _build_viewer(self) -> None:
+        """Visor 3D con su barra de camara y seleccion."""
+        from PySide6.QtWidgets import QVBoxLayout
+
         container = QWidget()
         self.viewer = Viewer3D(container)
-        from PySide6.QtWidgets import QVBoxLayout
+        self.viewer_bar = ViewerBar(container)
+
         lay = QVBoxLayout(container)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(self.viewer.widget)
+        lay.setSpacing(0)
+        lay.addWidget(self.viewer_bar)
+        lay.addWidget(self.viewer.widget, 1)
         self.setCentralWidget(container)
 
     def _build_panels(self) -> None:
@@ -189,6 +198,15 @@ class MainWindow(QMainWindow):
             "Reproducir la secuencia de salida en el visor")
 
         act("labels", "Etiquetas", "table", "", "Mostrar el identificador de cada taladro", True)
+        act("select_all", "Seleccionar todo", "layers", "Ctrl+A")
+        act("select_none", "Quitar la seleccion", "new", "Ctrl+D")
+        act("invert_selection", "Invertir la seleccion", "import", "Ctrl+Shift+I")
+        act("box_selection", "Seleccion por ventana", "grid", "B",
+            "Encerrar varios taladros con un rectangulo", True)
+        act("reset_charge", "Recargar con la regla global", "reset", "",
+            "Descarta la carga manual de los taladros seleccionados")
+        act("reset_delays", "Liberar retardos fijados", "timing", "",
+            "Devuelve los retardos manuales al amarre automatico")
         act("energy", "Campo de energia", "energy", "",
             "Superponer las isosuperficies de energia", True)
         act("view_iso", "Vista isometrica", "zoom", "Ctrl+1")
@@ -228,6 +246,22 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_labels)
         tb.addAction(self.act_energy)
         tb.addSeparator()
+
+        tb.addWidget(QLabel("  Asignar tipo  "))
+        self.type_combo = QComboBox()
+        self.type_combo.addItems([t.value for t in HoleType])
+        self.type_combo.setMinimumWidth(130)
+        self.type_combo.setToolTip(
+            "Tipo que se asignara a los taladros seleccionados")
+        tb.addWidget(self.type_combo)
+        self.act_assign_type = QAction(icons.icon("check", 18), "Asignar", self)
+        self.act_assign_type.setToolTip(
+            "Asignar el tipo elegido a los taladros seleccionados")
+        self.act_assign_type.triggered.connect(
+            lambda: self.assign_type_to_selection(self.type_combo.currentText()))
+        tb.addAction(self.act_assign_type)
+        tb.addAction(self.act_box_selection)
+        tb.addSeparator()
         tb.addAction(self.act_view_iso)
         tb.addAction(self.act_view_top)
         tb.addAction(self.act_reset_view)
@@ -265,6 +299,21 @@ class MainWindow(QMainWindow):
         d.addAction(self.act_optimize)
         d.addAction(self.act_animate)
 
+        sel = m.addMenu("&Seleccion")
+        for a in (self.act_select_all, self.act_select_none,
+                  self.act_invert_selection, self.act_box_selection):
+            sel.addAction(a)
+        sel.addSeparator()
+        self.menu_select_type = sel.addMenu("Seleccionar por tipo")
+        for t in HoleType:
+            action = QAction(t.value, self)
+            action.triggered.connect(
+                lambda _c=False, v=t.value: self.select_by_type(v))
+            self.menu_select_type.addAction(action)
+        sel.addSeparator()
+        sel.addAction(self.act_reset_charge)
+        sel.addAction(self.act_reset_delays)
+
         v = m.addMenu("&Ver")
         for a in (self.act_view_iso, self.act_view_top, self.act_view_front,
                   self.act_view_side, self.act_reset_view):
@@ -298,7 +347,12 @@ class MainWindow(QMainWindow):
         self.status_progress.setFixedWidth(140)
         self.status_progress.setVisible(False)
 
+        self.status_hint = QLabel(
+            "Izq: girar · Rueda: zoom · Centro o Shift+Izq: desplazar · Ctrl+Izq: rotar encuadre · Clic: seleccionar")
+        self.status_hint.setStyleSheet(
+            f"color:{C['text_muted']}; padding:0 10px;")
         sb.addWidget(self.status_message, 1)
+        sb.addWidget(self.status_hint)
         sb.addPermanentWidget(self.status_progress)
         for w in (self.status_holes, self.status_pf, self.status_ppv):
             w.setStyleSheet(f"color:{C['text_soft']}; padding:0 10px;"
@@ -327,8 +381,8 @@ class MainWindow(QMainWindow):
         self.act_energy.toggled.connect(self._toggle_energy)
         self.act_view_iso.triggered.connect(self.viewer.view_iso)
         self.act_view_top.triggered.connect(self.viewer.view_top)
-        self.act_view_front.triggered.connect(self.viewer.view_front)
-        self.act_view_side.triggered.connect(self.viewer.view_side)
+        self.act_view_front.triggered.connect(lambda: self.viewer.view_side("north"))
+        self.act_view_side.triggered.connect(lambda: self.viewer.view_side("east"))
         self.act_reset_view.triggered.connect(self.viewer.reset_camera)
         self.act_reset_layout.triggered.connect(self._reset_layout)
         self.act_about.triggered.connect(self._show_about)
@@ -344,15 +398,51 @@ class MainWindow(QMainWindow):
         self.explorer.import_requested.connect(self.import_data)
         self.explorer.hole_selected.connect(self.select_hole)
         self.explorer.layer_toggled.connect(self._on_layer_toggled)
-        self.holes_table.hole_selected.connect(self.select_hole)
+        self.holes_table.selection_changed.connect(self._on_table_selection)
         self.holes_table.export_requested.connect(self.export_holes)
-        self.properties_panel.hole_type_changed.connect(self._on_hole_type_changed)
+
+        self.properties_panel.hole_edited.connect(self._on_hole_edited)
+        self.properties_panel.charge_edited.connect(self._on_charge_edited)
+        self.properties_panel.bulk_type_requested.connect(self.assign_type_to_selection)
+        self.properties_panel.bulk_charge_requested.connect(self.copy_charge_to_selection)
+        self.properties_panel.reset_charge_requested.connect(self.reset_selection_charge)
+        self.properties_panel.zoom_requested.connect(self.viewer.zoom_to_selection)
+
+        self.act_select_all.triggered.connect(self.viewer.select_all)
+        self.act_select_none.triggered.connect(self.viewer.clear_selection)
+        self.act_invert_selection.triggered.connect(self.viewer.invert_selection)
+        self.act_box_selection.toggled.connect(self._on_box_selection)
+        self.act_reset_charge.triggered.connect(self.reset_selection_charge)
+        self.act_reset_delays.triggered.connect(self.reset_selection_delays)
+
+        self._connect_viewer_bar()
 
         self.optimize_panel.run_requested.connect(self._start_optimization)
         self.optimize_panel.apply_requested.connect(self._apply_scenario)
 
-        self.viewer.hole_picked.connect(self.select_hole)
+        self.viewer.selection_changed.connect(self._on_viewer_selection)
+        self.viewer.hole_activated.connect(self._on_hole_activated)
+        self.viewer.status_message.connect(self.status_message.setText)
         self.viewer.animation_finished.connect(lambda: self.timing_panel.set_animating(False))
+
+    def _connect_viewer_bar(self) -> None:
+        """Enlaza la barra del visor con la camara y la seleccion."""
+        bar, viewer = self.viewer_bar, self.viewer
+        bar.nav_mode_changed.connect(viewer.set_nav_mode)
+        bar.view_requested.connect(viewer.set_standard_view)
+        bar.orbit_requested.connect(viewer.orbit)
+        bar.roll_requested.connect(viewer.roll)
+        bar.dolly_requested.connect(viewer.dolly)
+        bar.spin_toggled.connect(viewer.set_spin)
+        bar.focus_requested.connect(viewer.focus_on_selection)
+        bar.zoom_selection_requested.connect(viewer.zoom_to_selection)
+        bar.fit_requested.connect(viewer.reset_camera)
+        bar.projection_toggled.connect(self._toggle_projection)
+        bar.z_scale_changed.connect(viewer.set_z_exaggeration)
+        bar.select_all_requested.connect(viewer.select_all)
+        bar.invert_selection_requested.connect(viewer.invert_selection)
+        bar.clear_selection_requested.connect(viewer.clear_selection)
+        bar.box_selection_toggled.connect(self.act_box_selection.setChecked)
 
     # ------------------------------------------------------------------
     # Arranque
@@ -362,6 +452,9 @@ class MainWindow(QMainWindow):
         self.log(f"{__appname__} {__version__} iniciado.", "OK")
         self.generate_mesh(announce=False)
         self.viewer.view_iso()
+        self._report_selection([])
+        self.log(
+            "Visor: arrastrar con el boton izquierdo gira, la rueda acerca, el boton central o Shift+izquierdo desplaza y Ctrl+izquierdo rota el encuadre. Un clic sin arrastrar selecciona el taladro.", "INFO")
         self._fix_dock_tabs()
         # La malla de arranque es solo un punto de partida: no cuenta como
         # trabajo sin guardar.
@@ -431,7 +524,6 @@ class MainWindow(QMainWindow):
             show_bench=self.explorer.layer_state("bench"),
             reset_camera=reset_camera)
         self.viewer.set_theme(self.theme_combo.currentText())
-        self.viewer.enable_picking()
 
         self.explorer.set_holes(d.holes)
         self.explorer.set_layer_available("topography", d.topography is not None)
@@ -511,9 +603,11 @@ class MainWindow(QMainWindow):
         for f in analysis.errors:
             self.log(f"{f['item']}: {f['message']}", "ERROR")
 
-        current = self.properties_panel.current_hole()
-        if current is not None:
-            self.select_hole(current.hid)
+        selection = self.viewer.selection()
+        if selection:
+            active = next((h for h in self.design.holes if h.hid == selection[0]), None)
+            self.properties_panel.show_hole(active, selection)
+            self.holes_table.set_selection(selection)
 
         if self._analysis_queued:
             self._analysis_queued = False
@@ -757,14 +851,144 @@ class MainWindow(QMainWindow):
     # Interaccion
     # ------------------------------------------------------------------
     def select_hole(self, hid: str) -> None:
+        """Selecciona un unico taladro desde el explorador o la bitacora."""
+        self.viewer.set_selection([hid])
+
+    def selected_holes(self) -> List[Hole]:
+        """Taladros del diseno actualmente seleccionados en el visor."""
+        chosen = set(self.viewer.selection())
+        return [h for h in self.design.holes if h.hid in chosen]
+
+    def _on_viewer_selection(self, hids: List[str]) -> None:
+        """Propaga al resto de la interfaz la seleccion hecha en el visor."""
+        if self._syncing_selection:
+            return
+        self._syncing_selection = True
+        try:
+            self.holes_table.set_selection(hids)
+            active = next((h for h in self.design.holes if h.hid == hids[0]), None) \
+                if hids else None
+            self.properties_panel.show_hole(active, hids)
+        finally:
+            self._syncing_selection = False
+        self._report_selection(hids)
+
+    def _on_table_selection(self, hids: List[str]) -> None:
+        """Selecciona en el visor lo que se marca en la tabla de taladros."""
+        if self._syncing_selection:
+            return
+        self._syncing_selection = True
+        try:
+            self.viewer.set_selection(hids, notify=False)
+            active = next((h for h in self.design.holes if h.hid == hids[0]), None) \
+                if hids else None
+            self.properties_panel.show_hole(active, hids)
+        finally:
+            self._syncing_selection = False
+        self._report_selection(hids)
+
+    def _report_selection(self, hids: List[str]) -> None:
+        holes = self.selected_holes()
+        for action in (self.act_reset_charge, self.act_reset_delays,
+                       self.act_assign_type):
+            action.setEnabled(bool(holes))
+        if not holes:
+            self.status_message.setText("Listo")
+            return
+        if len(holes) == 1:
+            h = holes[0]
+            self.status_message.setText(
+                f"Taladro {h.hid} · {h.hole_type} · {h.charge_kg:,.1f} kg · "
+                f"{h.delay_ms:,.0f} ms · burden {h.burden_real_m:.2f} m")
+            self.dock_properties.raise_()
+        else:
+            carga = sum(h.charge_kg for h in holes)
+            self.status_message.setText(
+                f"{len(holes)} taladros seleccionados · {carga:,.0f} kg de explosivo")
+
+    def _on_hole_activated(self, hid: str) -> None:
+        """Doble clic sobre un taladro: lo encuadra y abre su ficha."""
+        self.viewer.set_selection([hid])
+        self.viewer.focus_on_selection()
+        self.dock_properties.raise_()
+
+    def select_by_type(self, hole_type: str) -> None:
+        self.viewer.select_by(lambda h: h.hole_type == hole_type)
+
+    def _on_box_selection(self, enabled: bool) -> None:
+        self.viewer.set_box_selection(enabled)
+        self.viewer_bar.set_box_checked(enabled)
+
+    def _toggle_projection(self) -> None:
+        self.viewer.toggle_parallel_projection()
+        self.viewer_bar.set_projection_checked(self.viewer.is_parallel_projection())
+
+    # ------------------------------------------------------------------
+    # Edicion de taladros
+    # ------------------------------------------------------------------
+    def _on_hole_edited(self, hid: str) -> None:
+        """Un taladro cambio de tipo, geometria o retardo."""
+        self._dirty = True
+        self._refresh_scene()
+        self.viewer.set_selection(self.viewer.selection(), notify=False)
+        self.run_analysis()
+
+    def _on_charge_edited(self, hid: str) -> None:
+        """Se edito la columna de carga del taladro activo."""
         hole = next((h for h in self.design.holes if h.hid == hid), None)
         if hole is None:
             return
-        self.properties_panel.show_hole(hole)
-        self.viewer.highlight(hid)
-        self.dock_properties.raise_()
-        self.status_message.setText(
-            f"Taladro {hole.hid} · {hole.charge_kg:,.1f} kg · {hole.delay_ms:,.0f} ms")
+        charging.set_column(hole, self.properties_panel.pending_decks())
+        self._dirty = True
+        self._refresh_scene()
+        self.log(f"Carga manual en el taladro {hid}: "
+                 f"{hole.charge_kg:,.1f} kg en {hole.charge_length_m:.2f} m.", "INFO")
+        self.run_analysis()
+
+    def assign_type_to_selection(self, hole_type: str) -> None:
+        """Reclasifica todos los taladros seleccionados."""
+        holes = self.selected_holes()
+        if not holes:
+            self.log("No hay taladros seleccionados.", "AVISO")
+            return
+        for h in holes:
+            h.hole_type = hole_type
+        self._dirty = True
+        self._refresh_scene()
+        self.viewer.set_selection([h.hid for h in holes], notify=False)
+        self.log(f"{len(holes)} taladro(s) reclasificados como {hole_type}.", "OK")
+        self.run_analysis()
+
+    def copy_charge_to_selection(self, source_hid: str) -> None:
+        """Replica la columna del taladro activo sobre toda la seleccion."""
+        source = next((h for h in self.design.holes if h.hid == source_hid), None)
+        holes = [h for h in self.selected_holes() if h.hid != source_hid]
+        if source is None or not holes:
+            return
+        import copy as _copy
+        for h in holes:
+            charging.set_column(h, [_copy.deepcopy(d) for d in source.decks])
+        self._dirty = True
+        self._refresh_scene()
+        self.log(f"Columna de {source_hid} copiada a {len(holes)} taladro(s).", "OK")
+        self.run_analysis()
+
+    def reset_selection_charge(self) -> None:
+        """Devuelve la seleccion a la regla global de carguio."""
+        holes = self.selected_holes() or self.design.holes
+        n = charging.unlock_charge(holes, self.charge_panel.rule())
+        self._dirty = True
+        self._refresh_scene()
+        self.log(f"{n} taladro(s) recargados con la regla global.", "OK")
+        self.run_analysis()
+
+    def reset_selection_delays(self) -> None:
+        """Libera los retardos fijados a mano."""
+        holes = self.selected_holes() or self.design.holes
+        n = timing_core.clear_delay_locks(holes)
+        self._dirty = True
+        self.log(f"{n} retardo(s) devueltos al amarre automatico.", "OK")
+        self.run_analysis()
 
     def toggle_animation(self) -> None:
         if self.viewer.is_animating():
@@ -797,15 +1021,6 @@ class MainWindow(QMainWindow):
             self.act_energy.setChecked(visible)
         else:
             self._refresh_scene()
-
-    def _on_hole_type_changed(self, hid: str, new_type: str) -> None:
-        hole = next((h for h in self.design.holes if h.hid == hid), None)
-        if hole is None or hole.hole_type == new_type:
-            return
-        hole.hole_type = new_type
-        self.viewer.set_theme(self.theme_combo.currentText())
-        self.explorer.set_holes(self.design.holes)
-        self.log(f"Taladro {hid} reclasificado como {new_type}.", "INFO")
 
     def _on_design_changed(self) -> None:
         self._dirty = True

@@ -70,6 +70,9 @@ def assign_delays(holes: Sequence[Hole], params: TimingParams,
 
     t = t - t.min()
     for h, ti in zip(holes, t):
+        # Un retardo fijado a mano manda sobre el amarre automatico.
+        if getattr(h, 'delay_locked', False):
+            continue
         h.delay_ms = float(round(ti, 1)) + params.in_hole_delay_ms
 
     simulate_scatter(holes, params)
@@ -94,6 +97,14 @@ def simulate_scatter(holes: Sequence[Hole], params: TimingParams,
     for h in holes:
         sigma = max(h.delay_ms * cv, 0.05 if cv < 0.001 else 0.5)
         h.delay_actual_ms = float(h.delay_ms + rng.normal(0.0, sigma))
+
+
+def clear_delay_locks(holes: Sequence[Hole]) -> int:
+    """Devuelve los retardos fijados a mano al control del amarre automatico."""
+    n = sum(1 for h in holes if getattr(h, 'delay_locked', False))
+    for h in holes:
+        h.delay_locked = False
+    return n
 
 
 # ---------------------------------------------------------------------------
