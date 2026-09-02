@@ -49,8 +49,13 @@ DATA_DIRS = ("data", ".", "..", "../data")
 class MainWindow(QMainWindow):
     """Ventana principal de la aplicacion."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, initial_mode: str = "parametric",
+                 initial_path: Optional[Path | str] = None, parent=None):
+        super().__init__(parent)
+        self.initial_mode = initial_mode
+        self.initial_path = Path(initial_path) if initial_path else None
+        self.start_window = None
+
         self.setWindowTitle(f"{__appname__} {__version__} — {__tagline__}")
         self.setWindowIcon(icons.app_icon())
         self.resize(1680, 980)
@@ -174,6 +179,8 @@ class MainWindow(QMainWindow):
             setattr(self, f"act_{name}", a)
             return a
 
+        act("home", "Página de inicio", "home", "Ctrl+H",
+            "Volver a la pantalla de bienvenida y proyectos recientes")
         act("new", "Nuevo proyecto", "new", "Ctrl+N", "Empezar un diseno en blanco")
         act("open", "Abrir proyecto", "open", "Ctrl+O", "Abrir un proyecto .xbp")
         act("save", "Guardar", "save", "Ctrl+S", "Guardar el proyecto")
@@ -225,6 +232,8 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         self.addToolBar(tb)
 
+        tb.addAction(self.act_home)
+        tb.addSeparator()
         for a in (self.act_new, self.act_open, self.act_save):
             tb.addAction(a)
         tb.addSeparator()
@@ -277,6 +286,8 @@ class MainWindow(QMainWindow):
         m = self.menuBar()
 
         f = m.addMenu("&Archivo")
+        f.addAction(self.act_home)
+        f.addSeparator()
         for a in (self.act_new, self.act_open, self.act_save, self.act_save_as):
             f.addAction(a)
         f.addSeparator()
@@ -361,6 +372,7 @@ class MainWindow(QMainWindow):
         sb.addPermanentWidget(self.status_score)
 
     def _connect(self) -> None:
+        self.act_home.triggered.connect(self.open_start_page)
         self.act_new.triggered.connect(self.new_project)
         self.act_open.triggered.connect(self.open_project)
         self.act_save.triggered.connect(self.save_project)
@@ -445,19 +457,63 @@ class MainWindow(QMainWindow):
         bar.box_selection_toggled.connect(self.act_box_selection.setChecked)
 
     # ------------------------------------------------------------------
-    # Arranque
+    # Navegación y Arranque
     # ------------------------------------------------------------------
+    def open_start_page(self) -> None:
+        """Regresa a la página de inicio minimalista."""
+        if not self._confirm_discard():
+            return
+        from .start_page import StartWindow
+        self.start_window = StartWindow()
+        self.start_window.project_selected.connect(self._on_start_page_project_selected)
+        self.start_window.show()
+        self.close()
+
+    def _on_start_page_project_selected(self, mode: str, path: str) -> None:
+        new_win = MainWindow(initial_mode=mode, initial_path=path)
+        new_win.show()
+
     def _bootstrap(self) -> None:
-        """Genera una malla de ejemplo para que el visor nunca arranque vacio."""
+        """Inicializa la sesión según el modo seleccionado en la página de inicio."""
         self.log(f"{__appname__} {__version__} iniciado.", "OK")
-        self.generate_mesh(announce=False)
+        self._fix_dock_tabs()
+
+        from .start_page import RecentProjectsManager, find_data_file
+
+        if self.initial_mode == "turpo":
+            turpo = find_data_file("datos TURPO.csv")
+            if turpo:
+                self._import_holes(turpo)
+                RecentProjectsManager.add_recent(turpo)
+            else:
+                self.generate_mesh(announce=False)
+        elif self.initial_mode == "topo_mine":
+            topo = find_data_file("Topografia.csv")
+            coords = find_data_file("Coordenadas.csv")
+            if topo:
+                self._import_topography(topo)
+                RecentProjectsManager.add_recent(topo)
+            if coords:
+                self._import_holes(coords)
+                RecentProjectsManager.add_recent(coords)
+            if not topo and not coords:
+                self.generate_mesh(announce=False)
+        elif (self.initial_mode == "file" or self.initial_mode == "open_file") and self.initial_path:
+            p = self.initial_path
+            if p.suffix.lower() == project_io.PROJECT_EXT:
+                self.load_project_file(p)
+            elif "topo" in p.stem.lower():
+                self._import_topography(p)
+            else:
+                self._import_holes(p)
+            RecentProjectsManager.add_recent(p)
+        else:
+            self.generate_mesh(announce=False)
+
         self.viewer.view_iso()
         self._report_selection([])
         self.log(
-            "Visor: arrastrar con el boton izquierdo gira, la rueda acerca, el boton central o Shift+izquierdo desplaza y Ctrl+izquierdo rota el encuadre. Un clic sin arrastrar selecciona el taladro.", "INFO")
-        self._fix_dock_tabs()
-        # La malla de arranque es solo un punto de partida: no cuenta como
-        # trabajo sin guardar.
+            "Visor: arrastrar con el botón izquierdo gira, la rueda acerca, el botón central o Shift+izquierdo desplaza y Ctrl+izquierdo rota el encuadre. Un clic sin arrastrar selecciona el taladro.", "INFO")
         self._dirty = False
 
     # ------------------------------------------------------------------
@@ -715,6 +771,8 @@ class MainWindow(QMainWindow):
                  + (f", {report['rows_skipped']} descartadas" if report["rows_skipped"] else "")
                  + (f", longitud deducida en {report['derived_length']}"
                     if report["derived_length"] else "") + ".", "OK")
+        from .start_page import RecentProjectsManager
+        RecentProjectsManager.add_recent(path)
         self.run_analysis()
 
     def _import_topography(self, path: Path) -> None:
@@ -732,6 +790,8 @@ class MainWindow(QMainWindow):
         z0, z1 = report["z_range"]
         self.log(f"Topografia importada desde {report['file']}: {report['points']} puntos, "
                  f"cotas {z0:.1f} a {z1:.1f} m.", "OK")
+        from .start_page import RecentProjectsManager
+        RecentProjectsManager.add_recent(path)
         self.run_analysis()
 
     def export_holes(self) -> None:
@@ -783,18 +843,13 @@ class MainWindow(QMainWindow):
         self.generate_mesh()
         self.log("Proyecto nuevo.", "INFO")
 
-    def open_project(self) -> None:
-        if not self._confirm_discard():
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Abrir proyecto", "", f"Proyecto X-BLAST (*{project_io.PROJECT_EXT})")
-        if not path:
-            return
+    def load_project_file(self, path: Path) -> bool:
+        """Carga un archivo de proyecto .xbp y actualiza la interfaz."""
         try:
             self.design = project_io.load(path)
         except Exception as exc:
             QMessageBox.critical(self, "No se pudo abrir", str(exc))
-            return
+            return False
 
         self.project_path = Path(path)
         self.design_panel.geometry.set_params(self.design.pattern)
@@ -814,7 +869,19 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{__appname__} {__version__} — {self.design.name}")
         self.log(f"Proyecto abierto: {self.project_path.name} "
                  f"({len(self.design.holes)} taladros).", "OK")
+        from .start_page import RecentProjectsManager
+        RecentProjectsManager.add_recent(self.project_path)
         self.run_analysis()
+        return True
+
+    def open_project(self) -> None:
+        if not self._confirm_discard():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Abrir proyecto", "", f"Proyecto X-BLAST (*{project_io.PROJECT_EXT})")
+        if not path:
+            return
+        self.load_project_file(Path(path))
 
     def save_project(self, ask_path: bool = False) -> None:
         path = self.project_path
@@ -831,6 +898,8 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self.setWindowTitle(f"{__appname__} {__version__} — {self.project_path.stem}")
         self.log(f"Proyecto guardado en {self.project_path.name}.", "OK")
+        from .start_page import RecentProjectsManager
+        RecentProjectsManager.add_recent(self.project_path)
 
     def _confirm_discard(self) -> bool:
         if not self._dirty:
