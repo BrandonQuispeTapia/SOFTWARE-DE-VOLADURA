@@ -178,7 +178,25 @@ class GeometryTab(QWidget):
         layout.addWidget(self.btn_konya)
         self.kinfo = QLabel(""); self.kinfo.setStyleSheet("color:#00ff41;font-family:'Courier New';font-size:9pt;padding:4px;"); layout.addWidget(self.kinfo)
 
-        imp = QGroupBox("IMPORTAR DATOS"); imp.setStyleSheet(GS)
+        q_box = QGroupBox("CARGA RÁPIDA DE PROYECTOS"); q_box.setStyleSheet(GS)
+        qv = QVBoxLayout()
+        self.btn_load_turpo = QPushButton("⭐ CARGAR PROYECTO TURPO (228 TALADROS)")
+        self.btn_load_turpo.setStyleSheet("QPushButton{background-color:#1e3a8a;color:#38bdf8;border:1px solid #3b82f6;border-radius:5px;padding:8px;font-weight:bold;}QPushButton:hover{background-color:#1d4ed8;color:white;}")
+        self.btn_load_topo_mine = QPushButton("🏔️ CARGAR TOPOGRAFÍA Y TALADROS MINA")
+        self.btn_load_topo_mine.setStyleSheet("QPushButton{background-color:#064e3b;color:#34d399;border:1px solid #10b981;border-radius:5px;padding:8px;font-weight:bold;}QPushButton:hover{background-color:#047857;color:white;}")
+        self.btn_clear_to_parametric = QPushButton("📐 RESTABLECER MALLA PARAMÉTRICA")
+        self.btn_clear_to_parametric.setStyleSheet("QPushButton{background-color:#334155;color:#e2e8f0;border-radius:5px;padding:6px;font-size:9pt;}QPushButton:hover{background-color:#475569;}")
+        qv.addWidget(self.btn_load_turpo)
+        qv.addWidget(self.btn_load_topo_mine)
+        qv.addWidget(self.btn_clear_to_parametric)
+        q_box.setLayout(qv)
+        layout.addWidget(q_box)
+
+        self.btn_load_turpo.clicked.connect(self._quick_load_turpo)
+        self.btn_load_topo_mine.clicked.connect(self._quick_load_topo_mine)
+        self.btn_clear_to_parametric.clicked.connect(self._reset_to_parametric)
+
+        imp = QGroupBox("IMPORTAR MANUALMENTE CSV / DXF"); imp.setStyleSheet(GS)
         iv = QHBoxLayout()
         self.btn_topo = QPushButton("TOPOGRAFIA"); self.btn_coords = QPushButton("COORDENADAS")
         self.btn_taladros = QPushButton("TALADROS (TURPO)"); self.btn_dxf = QPushButton("DXF")
@@ -216,6 +234,48 @@ class GeometryTab(QWidget):
         self.btn_render.setStyleSheet("QPushButton{background-color:#00a8ff;color:#09090b;font-weight:bold;font-size:11pt;border-radius:6px;border:none;}QPushButton:hover{background-color:#00f0ff;}")
         main_layout.addWidget(self.btn_render)
 
+    def _quick_load_turpo(self):
+        from pathlib import Path
+        for cand in [Path("datos TURPO.csv"), Path("data/datos TURPO.csv"), Path("../data/datos TURPO.csv"), Path("../datos TURPO.csv")]:
+            if cand.exists():
+                self.turpo_file = str(cand.resolve())
+                self.coords_file = ""
+                self.status_coords.setText(f"TURPO OK: {cand.name}")
+                self.status_coords.setStyleSheet("color:#22c55e;font-weight:bold;padding:4px;")
+                self.coords_loaded.emit(self.turpo_file)
+                self.btn_render.click()
+                return
+        self._import_turpo()
+
+    def _quick_load_topo_mine(self):
+        from pathlib import Path
+        for cand in [Path("Topografia.csv"), Path("data/Topografia.csv"), Path("../data/Topografia.csv"), Path("../Topografia.csv")]:
+            if cand.exists():
+                self.topo_file = str(cand.resolve())
+                self.status_topo.setText(f"TOPO OK: {cand.name}")
+                self.status_topo.setStyleSheet("color:#22c55e;font-weight:bold;padding:4px;")
+                self.topo_loaded.emit(self.topo_file)
+                break
+        for cand in [Path("Coordenadas.csv"), Path("data/Coordenadas.csv"), Path("../data/Coordenadas.csv"), Path("../Coordenadas.csv")]:
+            if cand.exists():
+                self.coords_file = str(cand.resolve())
+                self.turpo_file = ""
+                self.status_coords.setText(f"COORDS OK: {cand.name}")
+                self.status_coords.setStyleSheet("color:#22c55e;font-weight:bold;padding:4px;")
+                self.coords_loaded.emit(self.coords_file)
+                break
+        self.btn_render.click()
+
+    def _reset_to_parametric(self):
+        self.turpo_file = ""
+        self.coords_file = ""
+        self.topo_file = ""
+        self.status_coords.setText("COORDENADAS: Sin cargar")
+        self.status_coords.setStyleSheet("color:#f59e0b;font-style:italic;padding:4px;")
+        self.status_topo.setText("TOPOGRAFIA: Sin cargar")
+        self.status_topo.setStyleSheet("color:#f59e0b;font-style:italic;padding:4px;")
+        self.btn_render.click()
+
     def _konya(self):
         de = self.diameter.value()
         B = 0.012 * (2.0 * 1.15 / 2.6 + 1.5) * de
@@ -230,9 +290,11 @@ class GeometryTab(QWidget):
         )
         if path:
             self.turpo_file = path
+            self.coords_file = ""
             self.status_coords.setText(f"TURPO OK: {path.split('/')[-1].split(chr(92))[-1]}")
             self.status_coords.setStyleSheet("color:#22c55e;font-weight:bold;padding:4px;")
             self.coords_loaded.emit(path)
+            self.btn_render.click()
 
     def _import_topo(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -244,6 +306,7 @@ class GeometryTab(QWidget):
             self.status_topo.setText(f"TOPO OK: {path.split('/')[-1].split(chr(92))[-1]}")
             self.status_topo.setStyleSheet("color:#22c55e;font-weight:bold;padding:4px;")
             self.topo_loaded.emit(path)
+            self.btn_render.click()
 
     def _import_coords(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -252,9 +315,11 @@ class GeometryTab(QWidget):
         )
         if path:
             self.coords_file = path
+            self.turpo_file = ""
             self.status_coords.setText(f"COORDS OK: {path.split('/')[-1].split(chr(92))[-1]}")
             self.status_coords.setStyleSheet("color:#22c55e;font-weight:bold;padding:4px;")
             self.coords_loaded.emit(path)
+            self.btn_render.click()
 
     def _emit(self): self.parameters_changed.emit(self.get_params())
     def get_params(self):

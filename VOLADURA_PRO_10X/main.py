@@ -40,6 +40,22 @@ def find_asset(name: str) -> Optional[Path]:
     return None
 
 
+def find_data_file(name: str) -> Optional[Path]:
+    """Busca archivos de datos en el directorio local, data/ o carpetas superiores."""
+    for base in [
+        Path(__file__).resolve().parent,
+        Path(__file__).resolve().parent / "data",
+        Path(__file__).resolve().parent.parent / "data",
+        Path(__file__).resolve().parent.parent,
+        Path("data"),
+        Path("../data"),
+    ]:
+        candidate = base / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
 @dataclass
 class Drillhole:
     id: str
@@ -50,6 +66,7 @@ class Drillhole:
     espaciamiento: float = 0.0
     longitud: float = 0.0
     taco: float = 0.0
+    carga: float = 0.0
     tipo_explosivo: str = "ANFO"
     cebo: str = "Pentolita 150g"
     row: int = 0
@@ -535,6 +552,14 @@ class ProjectExplorerTree(QTreeWidget):
             self.mesh_requested.emit(3, 5)
         elif item == self.item_malla_40:
             self.mesh_requested.emit(5, 8)
+        elif item in (self.topo_root, self.topo_item):
+            self.file_open_requested.emit("topo")
+        elif item in (self.coords_root, self.coords_item):
+            self.file_open_requested.emit("turpo")
+        elif item.parent() == self.taladros_root:
+            hid = item.data(0, Qt.UserRole)
+            if hid:
+                self.file_open_requested.emit(f"select:{hid}")
 
 
 class KpiDockWidget(QWidget):
@@ -623,7 +648,7 @@ class KpiDockWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("X-BLAST v2.0 — Enterprise Mining Suite")
+        self.setWindowTitle("X-BLAST Enterprise v2.0 — Gemelo Digital D&B")
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setStyleSheet(QSS)
         for ico in ["X-BLAST.ico", "X-BLAST.PNG", "X-BLAST.png"]:
@@ -643,7 +668,17 @@ class MainWindow(QMainWindow):
         self._setup_central()
         self._setup_menu()
         self._connect()
-        self._log("X-BLAST v2.0 Enterprise iniciado", "SUCCESS")
+        self._log("X-BLAST Enterprise v2.0 inicializado", "SUCCESS")
+        QTimer.singleShot(150, self._initial_render)
+
+    def _initial_render(self):
+        """Renderiza automáticamente la malla 3D inicial para que el visor nunca esté en negro."""
+        try:
+            self._render_3d()
+            self.tabs_dock.raise_()
+            self.plotter.reset_camera()
+        except Exception as e:
+            self._log(f"Inicialización 3D: {e}", "WARN")
 
     def _setup_docks(self):
         self.explorer_dock = QDockWidget("EXPLORADOR DE PROYECTOS", self)
@@ -681,7 +716,7 @@ class MainWindow(QMainWindow):
         self.tabs_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tabs_dock)
         self.tabifyDockWidget(self.explorer_dock, self.tabs_dock)
-        self.explorer_dock.raise_()
+        self.tabs_dock.raise_()
 
     def _setup_menu(self):
         menu_bar = self.menuBar()
@@ -758,13 +793,31 @@ class MainWindow(QMainWindow):
         self.tabs.loading_tab.btn_preview.clicked.connect(self._preview_loading)
         self.cad.mode_changed.connect(self._on_cad_mode)
         self.explorer_tree.mesh_requested.connect(self._generate_mesh_from_tree)
+        self.explorer_tree.file_open_requested.connect(self._on_explorer_action)
         self.props_panel.hole_type_changed.connect(self._on_hole_type_changed)
         self.tabs.geometry_tab.topo_loaded.connect(self._on_topo_loaded)
         self.tabs.geometry_tab.coords_loaded.connect(self._on_coords_loaded)
-        self.plotter.enable_point_picking(callback=self._on_pick, show_message=False, left_clicking=True)
-        self._log("X-BLAST v2.0 iniciado", "SUCCESS")
+        try:
+            self.plotter.enable_point_picking(callback=self._on_pick, show_message=False, left_clicking=True)
+        except Exception:
+            pass
+
+    def _on_explorer_action(self, action: str):
+        if action == "topo":
+            self.tabs.geometry_tab._quick_load_topo_mine()
+        elif action == "turpo":
+            self.tabs.geometry_tab._quick_load_turpo()
+        elif action.startswith("select:"):
+            hid = action.split(":", 1)[1]
+            for dh in self.taladros:
+                if dh.id == hid or dh.id == f"T-{hid}":
+                    self._update_properties_panel(dh)
+                    break
 
     def _generate_mesh_from_tree(self, rows, cols):
+        self.tabs.geometry_tab.turpo_file = ""
+        self.tabs.geometry_tab.coords_file = ""
+        self.tabs.geometry_tab.topo_file = ""
         self.tabs.geometry_tab.rows.setValue(rows)
         self.tabs.geometry_tab.cols.setValue(cols)
         self._render_3d()
@@ -907,15 +960,46 @@ class MainWindow(QMainWindow):
         )
 
         topo_file = p.get("topo_file", "")
+        turpo_file = p.get("turpo_file", "")
+        coords_file = p.get("coords_file", "")
+
+        # MODO 1: PROYECTO TURPO REAL (228 taladros)
+        if turpo_file:
+            self._render_drillhole_coords_turpo(turpo_file, stemming=stemming, diameter=d, lc=lc, b=b, s=s)
+            if topo_file:
+                self._render_topography(topo_file)
+            self.explorer_tree.populate_hole_list(self.taladros)
+            kpi_data = self._rebuild_kpis()
+            if kpi_data:
+                self.tabs.reporting_tab.update_kpis(kpi_data)
+                self.kpi_widget.update_kpis(kpi_data)
+            self.plotter.reset_camera()
+            try:
+                self.plotter.enable_point_picking(callback=self._on_pick, show_message=False, left_clicking=True)
+            except Exception:
+                pass
+            return
+
+        # MODO 2: COORDENADAS MINA
+        if coords_file:
+            self._render_drillhole_coords(coords_file, bh, sd, stemming, default_hole_type, charge_len, d, lc=lc, b=b, s=s)
+            if topo_file:
+                self._render_topography(topo_file)
+            self.explorer_tree.populate_hole_list(self.taladros)
+            kpi_data = self._rebuild_kpis()
+            if kpi_data:
+                self.tabs.reporting_tab.update_kpis(kpi_data)
+                self.kpi_widget.update_kpis(kpi_data)
+            self.plotter.reset_camera()
+            try:
+                self.plotter.enable_point_picking(callback=self._on_pick, show_message=False, left_clicking=True)
+            except Exception:
+                pass
+            return
+
+        # MODO 3: MALLA PARAMETRICA
         if topo_file:
             self._render_topography(topo_file)
-
-        coords_file = p.get("coords_file", "")
-        if coords_file:
-            self._render_drillhole_coords(coords_file, bh, sd, stemming, default_hole_type, charge_len, d)
-        turpo_file = p.get("turpo_file", "")
-        if turpo_file:
-            self._render_drillhole_coords_turpo(turpo_file)
 
         mesh_x0 = p.get("mesh_origin_x", 0.0)
         mesh_y0 = p.get("mesh_origin_y", 0.0)
@@ -1070,7 +1154,7 @@ class MainWindow(QMainWindow):
         try:
             import csv as csvmod
             xp, yp, zp = [], [], []
-            with open(filepath, 'r') as f:
+            with open(filepath, 'r', encoding='utf-8-sig') as f:
                 first_line = f.readline()
                 sep = ";" if ";" in first_line else ","
                 f.seek(0)
@@ -1078,26 +1162,34 @@ class MainWindow(QMainWindow):
                 header = next(reader, None)
                 for row in reader:
                     if len(row) >= 5:
-                        xp.append(float(row[2]))
-                        yp.append(float(row[3]))
-                        zp.append(float(row[4]))
+                        try:
+                            xp.append(float(row[2]))
+                            yp.append(float(row[3]))
+                            zp.append(float(row[4]))
+                        except ValueError:
+                            continue
             if len(xp) < 3:
                 self._log("Topografia: menos de 3 puntos", "WARN")
                 return
             pts = np.column_stack([xp, yp, zp])
             cloud = pv.PolyData(pts)
-            surface = cloud.delaunay_2d(alpha=max(np.std(xp), np.std(yp)) * 2)
-            self.plotter.add_mesh(surface, color="#3D6B4F", opacity=0.30, name="topo_surface")
-            self.plotter.add_mesh(surface, style="wireframe", color="#5A8A6A", opacity=0.10, name="topo_wire")
-            self._log(f"Topografia: {len(xp)} puntos, superficie generada", "SUCCESS")
+            try:
+                surface = cloud.delaunay_2d(alpha=100)
+            except Exception:
+                surface = cloud.delaunay_2d()
+            self.plotter.add_mesh(surface, color="#3D6B4F", opacity=0.35, name="topo_surface")
+            self.plotter.add_mesh(surface, style="wireframe", color="#5A8A6A", opacity=0.15, name="topo_wire")
+            self._log(f"Topografia: {len(xp)} puntos, superficie 3D generada", "SUCCESS")
         except Exception as e:
             self._log(f"Error Topografia: {e}", "ERROR")
 
-    def _render_drillhole_coords(self, filepath, bench_height, subdrill, stemming, hole_type, charge_len, diameter):
+    def _render_drillhole_coords(self, filepath, bench_height, subdrill, stemming, hole_type, charge_len, diameter, lc=None, b=4.5, s=5.0):
         try:
             import csv as csvmod
+            if lc is None:
+                lc = self.tabs.loading_tab.get_config()
             ids, xc, yc, zc = [], [], [], []
-            with open(filepath, 'r') as f:
+            with open(filepath, 'r', encoding='utf-8-sig') as f:
                 first_line = f.readline()
                 sep = ";" if ";" in first_line else ","
                 f.seek(0)
@@ -1105,45 +1197,67 @@ class MainWindow(QMainWindow):
                 header = next(reader, None)
                 for row in reader:
                     if len(row) >= 4:
-                        ids.append(row[0])
-                        xc.append(float(row[1]))
-                        yc.append(float(row[2]))
-                        zc.append(float(row[3]))
+                        try:
+                            ids.append(row[0].strip())
+                            xc.append(float(row[1]))
+                            yc.append(float(row[2]))
+                            zc.append(float(row[3]))
+                        except ValueError:
+                            continue
             if not ids:
                 self._log("Coordenadas: sin datos", "WARN")
                 return
             phys_rad = diameter / 2000.0
-            vis_rad = max(phys_rad, 0.08)
+            vis_rad = max(phys_rad, 0.4)
             hole_len = bench_height + subdrill
+
+            seq = self.tabs.sequence_tab.get_config()
+            interval = seq.get("hole_interval_ms", 25)
+
             for i, (hid, x, y, z) in enumerate(zip(ids, xc, yc, zc)):
-                collar = np.array([x, y, z])
-                toe = collar + np.array([0, 0, -hole_len])
+                collar = np.array([x, y, z], dtype=np.float64)
+                toe = collar + np.array([0, 0, -hole_len], dtype=np.float64)
                 color_data = TYPE_COLORS_3D.get(hole_type, ((0.85, 0.2, 0.2), "Prod"))
                 cc = color_data[0]
-                sc = pv.Cylinder(center=collar + np.array([0, 0, -stemming / 2]), direction=(0, 0, 1), radius=vis_rad * 1.2, height=stemming, resolution=16)
-                self.plotter.add_mesh(sc, color="#64748B", opacity=0.8)
+                sc = pv.Cylinder(center=collar + np.array([0, 0, -stemming / 2]), direction=(0, 0, 1), radius=vis_rad * 1.15, height=stemming, resolution=16)
+                self.plotter.add_mesh(sc, color="#64748B", opacity=0.85, name=f"stem_coord_{i}")
                 cr = pv.Cylinder(center=collar + np.array([0, 0, -stemming - charge_len / 2]), direction=(0, 0, 1), radius=vis_rad, height=charge_len, resolution=16)
-                ca = self.plotter.add_mesh(cr, color=cc, opacity=0.9, pickable=True)
+                ca = self.plotter.add_mesh(cr, color=cc, opacity=0.9, pickable=True, name=f"charge_coord_{i}")
+
+                charge_kg = charge_len * 1.15 * math.pi * phys_rad**2 * lc.get("density", 1.15) * 1000
                 from gui.blast_animator import BlastHole
-                h = BlastHole(hid, collar, toe, vis_rad, 0.0, charge_len * 1.15, hole_type, i, 0)
+                h = BlastHole(hid, collar, toe, vis_rad, float(i * interval), charge_kg, hole_type, i, 0)
                 h.actor = ca
                 self.blast_holes.append(h)
+
+                dh = Drillhole(
+                    id=f"{hid}", x=x, y=y, z=z,
+                    diametro_mm=diameter, longitud=hole_len, taco=stemming, carga=charge_len,
+                    tipo_explosivo=lc.get("explosive_name", "ANFO"), cebo=lc.get("booster_type", "Booster 450g"),
+                    burden_real_m=b, espaciamiento_m=s, inclinacion_deg=90.0,
+                    azimut_deg=0.0, delay_ms=float(i * interval), row=i // 10, col=i % 10,
+                    hole_type=hole_type, charge_mass_kg=charge_kg, p80_mm=210.0, x50_cm=14.0,
+                    actor=ca,
+                )
+                self.taladros.append(dh)
+
             self.plotter.add_point_labels(
                 np.array([np.array([float(x), float(y), float(z) + 1.5]) for x, y, z in zip(xc, yc, zc)]),
                 [f"T-{hid}" for hid in ids],
-                font_size=10, text_color="#FBBF24", bold=True, point_size=1, shape_opacity=0, name="coord_labels", always_visible=True
+                font_size=9, text_color="#FBBF24", bold=True, point_size=1, shape_opacity=0, name="coord_labels", always_visible=True
             )
             self._log(f"Coordenadas: {len(ids)} taladros cargados", "SUCCESS")
         except Exception as e:
             self._log(f"Error Coordenadas: {e}", "ERROR")
 
-    def _render_drillhole_coords_turpo(self, filepath):
-        """Renderiza taladros TURPO con cilindros inclinados verdaderos."""
+    def _render_drillhole_coords_turpo(self, filepath, stemming=2.5, diameter=102.0, lc=None, b=4.5, s=5.0):
+        """Renderiza taladros TURPO con cilindros inclinados verdaderos, segmentando taco y carga."""
         try:
             import csv as csvmod
+            if lc is None:
+                lc = self.tabs.loading_tab.get_config()
             ids, xs, ys, z_toes, z_collars, lengths, azs, dips, mats = [], [], [], [], [], [], [], [], []
 
-            # Parsear archivo TURPO
             with open(filepath, 'r', encoding='utf-8-sig') as f:
                 first_line = f.readline().strip()
                 sep = ";" if ";" in first_line else ","
@@ -1161,28 +1275,31 @@ class MainWindow(QMainWindow):
                         z_toes.append(float(row[3]))
                         z_collars.append(float(row[4]))
 
-                        # Auto-calcular LENGTH si es 0
                         ln = float(row[5]) if (row[5].strip() and row[5].strip() != '0') else abs(float(row[4]) - float(row[3]))
-                        lengths.append(max(ln, 1.0))  # Mínimo 1m
+                        lengths.append(max(ln, 1.0))
 
                         azs.append(float(row[6]) if row[6].strip() else 0.0)
                         dips.append(float(row[7]) if row[7].strip() else -90.0)
                         mats.append(row[8].strip().upper() if len(row) > 8 else "PRODUCCION")
-                    except (ValueError, IndexError) as e:
-                        self._log(f"Fila {row_num}: error parsing {e}", "WARN")
+                    except (ValueError, IndexError):
                         continue
 
             if not ids:
                 self._log("TURPO: sin datos válidos", "WARN")
                 return
 
-            vis_rad = 0.08
-            self._log(f"TURPO: Procesando {len(ids)} taladros...", "INFO")
+            vis_rad = max(diameter / 2000.0, 0.45)
+            self._log(f"TURPO: Procesando {len(ids)} taladros inclinados...", "INFO")
+
+            seq = self.tabs.sequence_tab.get_config()
+            interval = seq.get("hole_interval_ms", 25)
+
+            collar_labels = []
+            label_texts = []
 
             for i, (hid, x, y, zt, zc, ln, az_deg, dip_deg, mat) in enumerate(zip(ids, xs, ys, z_toes, z_collars, lengths, azs, dips, mats)):
                 collar = np.array([float(x), float(y), float(zc)], dtype=np.float64)
 
-                # Calcular toe usando azimuth y dip
                 if abs(az_deg) > 0.1 or abs(dip_deg + 90.0) > 0.1:
                     az_rad = math.radians(float(az_deg))
                     dip_rad = math.radians(float(dip_deg))
@@ -1193,43 +1310,66 @@ class MainWindow(QMainWindow):
                 else:
                     toe = np.array([float(x), float(y), float(zt)], dtype=np.float64)
 
-                # Color según material
-                cc = (0.85, 0.2, 0.2)  # Rojo por defecto
-                mat_str = str(mat).upper()
-                if "PRECORTE" in mat_str or "PRESPLIT" in mat_str:
-                    cc = (0.1, 0.6, 0.85)  # Azul
-                elif "CORTE" in mat_str or "CUT" in mat_str:
-                    cc = (0.9, 0.55, 0.1)  # Amarillo
-
-                # Vector de dirección
                 h_vec = toe - collar
                 h_len = float(np.linalg.norm(h_vec))
                 if h_len < 0.1:
                     continue
-
                 h_dir = h_vec / h_len
-                center = (collar + toe) / 2.0
 
-                # Cilindro inclinado
-                cyl = pv.Cylinder(
-                    center=center,
-                    direction=h_dir,
-                    radius=vis_rad,
-                    height=h_len,
-                    resolution=12
+                stem_len = min(stemming, h_len * 0.35)
+                chg_len = max(h_len - stem_len, 0.5)
+
+                # Taco (Stemming) - Gris
+                stem_center = collar + h_dir * (stem_len / 2.0)
+                sc = pv.Cylinder(center=stem_center, direction=h_dir, radius=vis_rad * 1.15, height=stem_len, resolution=16)
+                self.plotter.add_mesh(sc, color="#64748B", opacity=0.85, name=f"turpo_stem_{i}")
+
+                # Carga (Explosivo) - Color según tipo
+                cc = (0.9, 0.2, 0.2)
+                mat_str = str(mat).upper()
+                hole_type_str = "PRODUCCION"
+                if "PRECORTE" in mat_str or "PRESPLIT" in mat_str:
+                    cc = (0.1, 0.6, 0.9)
+                    hole_type_str = "PRECORTE"
+                elif "CORTE" in mat_str or "CUT" in mat_str:
+                    cc = (0.95, 0.6, 0.1)
+                    hole_type_str = "AMORTIGUADO"
+
+                chg_center = collar + h_dir * (stem_len + chg_len / 2.0)
+                cr = pv.Cylinder(center=chg_center, direction=h_dir, radius=vis_rad, height=chg_len, resolution=16)
+                ca = self.plotter.add_mesh(cr, color=cc, opacity=0.9, pickable=True, name=f"turpo_charge_{i}")
+
+                charge_kg = chg_len * 1.15 * math.pi * (diameter / 2000.0)**2 * lc.get("density", 1.15) * 1000
+
+                from gui.blast_animator import BlastHole
+                bh_obj = BlastHole(f"T-{hid}", collar, toe, vis_rad, float(i * interval), charge_kg, hole_type_str, i // 10, i % 10)
+                bh_obj.actor = ca
+                self.blast_holes.append(bh_obj)
+
+                dh = Drillhole(
+                    id=f"T-{hid}", x=float(x), y=float(y), z=float(zc),
+                    diametro_mm=diameter, longitud=h_len, taco=stem_len, carga=chg_len,
+                    tipo_explosivo=lc.get("explosive_name", "ANFO"), cebo=lc.get("booster_type", "Booster 450g"),
+                    burden_real_m=b, espaciamiento_m=s, inclinacion_deg=float(dip_deg),
+                    azimut_deg=float(az_deg), delay_ms=float(i * interval), row=i // 10, col=i % 10,
+                    hole_type=hole_type_str, charge_mass_kg=charge_kg, p80_mm=210.0, x50_cm=14.5,
+                    actor=ca
                 )
-                self.plotter.add_mesh(cyl, color=cc, opacity=0.85, pickable=True, name=f"turpo_hole_{i}")
+                self.taladros.append(dh)
 
-                # Etiqueta
-                label_pt = collar + np.array([0, 0, 1.5])
+                if i % 6 == 0:  # Etiqueta cada 6 taladros para claridad óptima
+                    collar_labels.append(collar + np.array([0, 0, 1.5]))
+                    label_texts.append(f"T-{hid}")
+
+            if collar_labels:
                 self.plotter.add_point_labels(
-                    np.array([label_pt]),
-                    [f"T-{hid}"],
+                    np.array(collar_labels),
+                    label_texts,
                     font_size=8, text_color="#FBBF24", bold=True, point_size=0.5, shape_opacity=0,
-                    name=f"label_turpo_{i}", always_visible=True
+                    name="turpo_labels", always_visible=True
                 )
 
-            self._log(f"TURPO: ✓ {len(ids)} taladros cargados", "SUCCESS")
+            self._log(f"TURPO: ✓ {len(self.taladros)} taladros cargados", "SUCCESS")
         except Exception as e:
             import traceback
             self._log(f"Error TURPO: {str(e)}", "ERROR")
