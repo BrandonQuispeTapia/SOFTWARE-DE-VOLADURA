@@ -16,8 +16,8 @@ import numpy as np
 
 from .. import __version__
 from ..core.models import (
-    BlastDesign, CostParams, Deck, DeckKind, Hole, PatternParams, RockMass,
-    SiteConstraints, TimingParams,
+    BlastDesign, CostParams, Deck, DeckKind, DirectionVector, Hole, PatternParams,
+    RockMass, SiteConstraints, TimingParams,
 )
 
 PROJECT_EXT = ".xbp"
@@ -58,6 +58,7 @@ def design_to_dict(design: BlastDesign) -> Dict[str, Any]:
         "holes": [h.to_dict() for h in design.holes],
         "topography": design.topography.tolist() if design.topography is not None else None,
         "free_face": design.free_face.tolist() if design.free_face is not None else None,
+        "direction": _dump_dataclass(design.direction) if design.direction else None,
     }
 
 
@@ -102,6 +103,8 @@ def dict_to_design(data: Dict[str, Any]) -> BlastDesign:
         design.topography = np.array(data["topography"], float)
     if data.get("free_face"):
         design.free_face = np.array(data["free_face"], float)
+    if data.get("direction"):
+        design.direction = build(DirectionVector, "direction")
     return design
 
 

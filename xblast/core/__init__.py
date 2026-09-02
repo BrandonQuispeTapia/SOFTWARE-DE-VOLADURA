@@ -3,6 +3,7 @@
 Modulos:
     models          Entidades del dominio (taladro, macizo, explosivo, diseno).
     explosives      Catalogo de agentes de voladura, cebos y tacos.
+    detonators      Catalogo de detonadores y sus limites de programacion.
     pattern         Generacion de mallas y formulas de dimensionamiento.
     charging        Columna de carga por plataformas y perfiles de energia.
     burden          Burden real, alivio y volumenes de responsabilidad.
@@ -18,13 +19,13 @@ Modulos:
 
 from .analysis import BlastAnalysis, analyze
 from .models import (
-    BlastDesign, CostParams, Deck, DeckKind, Explosive, Hole, HoleType,
-    InitiationSystem, PatternParams, PatternType, RockMass, SiteConstraints,
-    TimingParams,
+    BlastDesign, CostParams, Deck, DeckKind, DirectionVector, Explosive, Hole,
+    HoleType, InitiationSystem, PatternParams, PatternType, RockMass,
+    SiteConstraints, TimingParams,
 )
 
 __all__ = [
     "BlastAnalysis", "analyze", "BlastDesign", "CostParams", "Deck", "DeckKind",
-    "Explosive", "Hole", "HoleType", "InitiationSystem", "PatternParams",
-    "PatternType", "RockMass", "SiteConstraints", "TimingParams",
+    "DirectionVector", "Explosive", "Hole", "HoleType", "InitiationSystem",
+    "PatternParams", "PatternType", "RockMass", "SiteConstraints", "TimingParams",
 ]

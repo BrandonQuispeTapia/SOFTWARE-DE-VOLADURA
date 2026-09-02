@@ -97,7 +97,11 @@ def analyze(
     burden.assign_volumes(holes, p.area_per_hole_m2)
 
     # 3) Secuencia ---------------------------------------------------------
-    timing_mod.assign_delays(holes, design.timing, p.face_azimuth_deg)
+    vector = design.direction
+    if vector is None and design.timing.mode != "Patron de amarre":
+        vector = timing_mod.default_vector(holes, p.face_azimuth_deg, design.timing)
+        design.direction = vector
+    timing_mod.assign_delays(holes, design.timing, p.face_azimuth_deg, vector)
     burden.compute_relief_burden(holes)
     res.timing_stats = timing_mod.relief_time_analysis(holes, design.timing)
     res.cooperation = timing_mod.cooperating_charge(holes, design.timing.cooperation_window_ms)

@@ -28,13 +28,15 @@ from ..core import pattern as pattern_mod
 from ..core.analysis import BlastAnalysis
 from ..core.charging import ChargeRule
 from ..core.models import (
-    BlastDesign, CostParams, Hole, HoleType, InitiationSystem, PatternParams,
-    RockMass, SiteConstraints, TimingParams,
+    BlastDesign, CostParams, DirectionVector, Hole, HoleType, InitiationSystem,
+    PatternParams, RockMass, SiteConstraints, TimingParams,
 )
 from ..core.optimizer import Scenario
-from ..core.timing import timing_histogram
+from ..core.timing import (
+    check_sequence, default_vector, firing_path, isochrones, timing_histogram,
+)
 from ..core.vibration import max_charge_for_ppv
-from ..dataio import loaders, project as project_io
+from ..dataio import blast_machine, loaders, project as project_io
 from ..reports.html_report import build_report
 from . import icons, tasks
 from . import widgets as W
@@ -212,6 +214,10 @@ class MainWindow(QMainWindow):
             "Explorar escenarios y proponer el de menor costo por tonelada")
         act("animate", "Animar secuencia", "run", "F8",
             "Reproducir la secuencia de salida en el visor")
+        act("place_vector", "Vector de direccion", "measure", "F9",
+            "Dibujar con dos clics hacia donde avanza el disparo")
+        act("export_machine", "Exportar a maquina de disparo", "export", "",
+            "Programa de tiempos para cargar en el sistema electronico")
 
         act("labels", "Etiquetas", "table", "", "Mostrar el identificador de cada taladro", True)
         act("select_all", "Seleccionar todo", "layers", "Ctrl+A")
@@ -255,6 +261,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_analyze)
         tb.addAction(self.act_optimize)
         tb.addAction(self.act_animate)
+        tb.addAction(self.act_place_vector)
         tb.addSeparator()
 
         tb.addWidget(QLabel("  Tematizar por  "))
@@ -321,6 +328,9 @@ class MainWindow(QMainWindow):
         d.addAction(self.act_analyze)
         d.addAction(self.act_optimize)
         d.addAction(self.act_animate)
+        d.addSeparator()
+        d.addAction(self.act_place_vector)
+        d.addAction(self.act_export_machine)
 
         sel = m.addMenu("&Seleccion")
         for a in (self.act_select_all, self.act_select_none,
@@ -402,6 +412,8 @@ class MainWindow(QMainWindow):
         self.act_optimize.triggered.connect(lambda: self._start_optimization(
             self.optimize_panel.settings()))
         self.act_animate.triggered.connect(self.toggle_animation)
+        self.act_place_vector.triggered.connect(self.place_direction_vector)
+        self.act_export_machine.triggered.connect(self.export_blast_machine)
 
         self.act_labels.toggled.connect(self.viewer.set_labels_visible)
         self.act_energy.toggled.connect(self._toggle_energy)
@@ -422,6 +434,15 @@ class MainWindow(QMainWindow):
         self.charge_panel.changed.connect(self._on_charge_changed)
         self.timing_panel.changed.connect(self._on_timing_changed)
         self.timing_panel.animate_requested.connect(self.toggle_animation)
+        self.timing_panel.place_vector_requested.connect(self.place_direction_vector)
+        self.timing_panel.auto_vector_requested.connect(self.auto_direction_vector)
+        self.timing_panel.vector_changed.connect(self._on_vector_changed)
+        self.timing_panel.check_requested.connect(self.check_sequence)
+        self.timing_panel.export_requested.connect(self.export_blast_machine)
+        self.timing_panel.overlay_changed.connect(self._refresh_timing_overlays)
+
+        self.viewer.direction_vector_placed.connect(self._on_vector_placed)
+        self.viewer.placement_changed.connect(self.timing_panel.set_placing)
 
         self.explorer.import_requested.connect(self.import_data)
         self.explorer.hole_selected.connect(self.select_hole)
@@ -541,6 +562,8 @@ class MainWindow(QMainWindow):
         self.design.rock = self.design_panel.rock.rock()
         self.design.constraints = self.design_panel.site.constraints()
         self.design.timing = self.timing_panel.params()
+        if self.timing_panel.vector() is not None:
+            self.design.direction = self.timing_panel.vector()
 
         rule = self.charge_panel.rule()
         self.design.pattern.stemming_m = rule.stemming_m
@@ -639,9 +662,13 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self.analysis = analysis
         # El hilo trabajo sobre una copia: adoptamos sus taladros, que ya traen
-        # burden real, retardos, volumenes y fragmentacion por taladro.
+        # burden real, retardos, volumenes y fragmentacion por taladro. El vector
+        # tambien puede haberlo creado el motor, si el metodo lo pedia y no habia
+        # ninguno; sin traerlo de vuelta el panel se quedaria vacio.
         self.design.holes = analysis.design.holes
         self.design.free_face = analysis.design.free_face
+        if self.design.direction is None and analysis.design.direction is not None:
+            self.design.direction = analysis.design.direction
         target = self.optimize_panel.target_p80.value()
 
         self.results_panel.update_results(analysis, target)
@@ -661,6 +688,11 @@ class MainWindow(QMainWindow):
         self.viewer.set_theme(self.theme_combo.currentText())
         if self.act_energy.isChecked():
             self.viewer.show_energy_field(analysis.energy_field)
+
+        # El motor puede haber creado el vector por su cuenta la primera vez.
+        if self.design.direction is not None:
+            self.timing_panel.set_vector(self.design.direction)
+        self._refresh_timing_overlays()
 
         level = "ok" if analysis.score >= 85 else ("warn" if analysis.score >= 60 else "error")
         self.status_score.set_status(f"Calidad {analysis.score}/100", level)
@@ -1086,12 +1118,118 @@ class MainWindow(QMainWindow):
             self.timing_panel.set_animating(False)
             self.log("Animacion detenida.", "INFO")
         else:
-            self.viewer.start_animation()
+            self.viewer.start_animation(self.timing_panel.animation_speed())
             self.timing_panel.set_animating(True)
             self.log(f"Reproduciendo la secuencia: "
                      f"{self.design.timing.pattern}, "
                      f"{self.analysis.kpis['total_duration_ms']:,.0f} ms de duracion."
                      if self.analysis else "Reproduciendo la secuencia.", "INFO")
+
+    # ------------------------------------------------------------------
+    # Secuencia electronica
+    # ------------------------------------------------------------------
+    def place_direction_vector(self) -> None:
+        """Activa la colocacion del vector con dos clics sobre el visor."""
+        if self.viewer.is_placing_vector():
+            self.viewer.cancel_vector_placement()
+            return
+        if not self.design.holes:
+            self.log("Genere primero la malla.", "AVISO")
+            return
+        self.dock_timing.raise_()
+        self.viewer.start_vector_placement()
+
+    def auto_direction_vector(self) -> None:
+        """Deduce el vector de la cara libre y del tamano de la malla."""
+        if not self.design.holes:
+            return
+        previo = self.timing_panel.vector()
+        vector = default_vector(self.design.holes,
+                                self.design.pattern.face_azimuth_deg,
+                                self.design.timing)
+        if previo is not None:
+            # Se conserva la temporizacion que el usuario haya afinado.
+            vector.brb_ms_m = previo.brb_ms_m
+            vector.brs_ms_m = previo.brs_ms_m
+        self._on_vector_placed(vector)
+        self.log(f"Vector automatico: azimut {vector.azimuth_deg:.0f}°, "
+                 f"{vector.brb_ms_m:.1f} ms/m de avance.", "OK")
+
+    def _on_vector_placed(self, vector: DirectionVector) -> None:
+        """Adopta un vector recien dibujado o deducido."""
+        previo = self.timing_panel.vector()
+        if previo is not None:
+            vector.brb_ms_m = previo.brb_ms_m
+            vector.brs_ms_m = previo.brs_ms_m
+        self.design.direction = vector
+        self.timing_panel.set_vector(vector)
+        self.viewer.show_direction_vector(vector)
+
+        if self.design.timing.mode == "Patron de amarre":
+            self.timing_panel.mode.setCurrentText("Vector de direccion")
+            self.log("Metodo de secuencia cambiado a vector de direccion.", "INFO")
+        else:
+            self._dirty = True
+            self.run_analysis()
+
+    def _on_vector_changed(self, vector: DirectionVector) -> None:
+        self.design.direction = vector
+        self.viewer.show_direction_vector(vector)
+        self._dirty = True
+        self.run_analysis()
+
+    def _refresh_timing_overlays(self) -> None:
+        """Dibuja o retira el vector, las isocronas y el recorrido del disparo."""
+        if not self.design.holes:
+            return
+        modo = self.design.timing.mode
+        self.viewer.show_direction_vector(
+            self.design.direction if modo != "Patron de amarre" else None)
+
+        if self.timing_panel.isolines_enabled():
+            curvas = isochrones(self.design.holes,
+                                self.timing_panel.isolines_interval())
+            self.viewer.show_isochrones(curvas)
+            if not curvas:
+                self.log("No hay isocronas que dibujar: el intervalo supera la "
+                         "duracion del disparo.", "AVISO")
+        else:
+            self.viewer.hide_isochrones()
+
+        if self.timing_panel.path_enabled():
+            self.viewer.show_firing_path(firing_path(self.design.holes))
+        else:
+            self.viewer.hide_firing_path()
+
+    def check_sequence(self) -> None:
+        """Valida el programa de tiempos y publica los hallazgos."""
+        if not self.design.holes:
+            return
+        hallazgos = check_sequence(self.design.holes, self.design.timing)
+        self.timing_panel.set_findings(hallazgos)
+        criticos = sum(1 for f in hallazgos if f["level"] == "error")
+        avisos = sum(1 for f in hallazgos if f["level"] == "warn")
+        self.log(f"Secuencia comprobada con {self.design.timing.detonator}: "
+                 f"{criticos} critico(s), {avisos} aviso(s).",
+                 "ERROR" if criticos else "OK")
+        for f in hallazgos:
+            if f["level"] == "error":
+                self.log(f"{f['item']}: {f['message']}", "ERROR")
+
+    def export_blast_machine(self) -> None:
+        """Exporta el programa de tiempos para el sistema electronico."""
+        if not self.design.holes:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Exportar programa de tiempos",
+            f"tiempos_{_slug(self.design.name)}.csv", "Archivo CSV (*.csv)")
+        if not path:
+            return
+        out = blast_machine.export_blast_machine(
+            self.design.holes, path, self.design.timing.detonator, self.design.name)
+        resumen = blast_machine.summary(self.design.holes, self.design.timing.detonator)
+        self.log(f"Programa exportado a {out.name}: {resumen['units']} detonadores, "
+                 f"{resumen['duration_ms']:,.0f} ms de duracion.", "OK")
 
     def _toggle_energy(self, enabled: bool) -> None:
         if enabled and self.analysis is not None:

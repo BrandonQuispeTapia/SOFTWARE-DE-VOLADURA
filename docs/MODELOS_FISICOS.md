@@ -104,6 +104,34 @@ retiene mejor que detritus o arena).
 
 ## 5. Secuencia — `core/timing.py`
 
+### Secuencia por vector de dirección
+
+Con `v` el vector unitario de avance y `u` su perpendicular horizontal, el
+retardo de un taladro situado en `p` respecto del origen `o` es:
+
+```
+t = BRB · [(p − o) · v]  +  BRS · |(p − o) · u|
+```
+
+y el conjunto se desplaza para que el primer taladro salga en cero. `BRB` es el
+tiempo por metro de avance —el alivio del burden— y `BRS` el tiempo por metro
+transversal. Con `BRS = 0` cada fila sale entera a la vez.
+
+La salida radial desde un punto es el caso degenerado `t = k · |p − o|`.
+
+### Detonadores
+
+Cada modelo aporta tres límites: rango programable, incremento mínimo y
+precisión. La dispersión simulada de cada retardo es
+
+```
+σ = max(|t| · precisión, suelo)
+```
+
+con la precisión como fracción del nominal (0.005 % en electrónicos frente a
+3 % en pirotécnicos) y un suelo en milisegundos que evita subestimarla en
+tiempos cortos.
+
 ### Tiempos de alivio
 
 | Criterio | Rango recomendado |
@@ -122,11 +150,14 @@ de esa ventana cooperan sísmicamente y su masa se suma para predecir el PPV.
 
 ### Dispersión
 
-| Sistema | Coeficiente de variación del retardo |
-| --- | --- |
-| Electrónico | 0.02 % |
-| Pirotécnico (NONEL) | 3 % |
-| Cordón detonante | 6 % |
+La precisión la aporta el modelo de detonador, no una categoría genérica
+(`core/detonators.py`):
+
+| Familia | Precisión típica | Suelo |
+| --- | --- | --- |
+| Electrónico (i-kon, DigiShot, eDev) | 0.005 – 0.05 % del nominal | 0.1 – 0.3 ms |
+| Pirotécnico (NONEL) | 3 % | 0.5 – 1 ms |
+| Cordón detonante | 6 % | 1 ms |
 
 `overlap_probability()` perturba los retardos con ese coeficiente en 400
 realizaciones de Monte Carlo y devuelve la probabilidad de solape y de salida

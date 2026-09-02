@@ -211,6 +211,7 @@ class Deck:
     coupling: float = 1.0              # d_carga / d_taladro
     primers: int = 0                   # numero de cebos en la plataforma
     from_toe_m: float = 0.0            # calculado por ChargeColumn.resolve()
+    delay_ms: float = 0.0              # retardo propio dentro del taladro
 
     @property
     def is_charge(self) -> bool:
@@ -331,8 +332,18 @@ class Hole:
 
     @property
     def is_decked(self) -> bool:
-        """True si hay mas de una plataforma de carga separada."""
-        return sum(1 for d in self.decks if d.is_charge) > 1
+        """True si la columna esta partida en cargas independientes.
+
+        Cuenta cargas separadas por taco o aire, no plataformas: dos tramos
+        contiguos de explosivo distinto siguen siendo una sola carga.
+        """
+        separadas = 0
+        previa_era_carga = False
+        for d in self.decks:
+            if d.is_charge and not previa_era_carga:
+                separadas += 1
+            previa_era_carga = d.is_charge
+        return separadas > 1
 
     def charge_segments(self) -> List[Tuple[np.ndarray, np.ndarray, Deck]]:
         """Segmentos 3D (inicio, fin, deck) de cada plataforma de carga."""
@@ -356,6 +367,76 @@ class Hole:
 # ---------------------------------------------------------------------------
 # Parametros y diseno
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class DirectionVector:
+    """Vector que gobierna la propagacion del disparo.
+
+    Es la forma directa de temporizar una voladura: se dibuja una flecha
+    sobre la malla y el retardo de cada taladro sale de su posicion respecto
+    de ella. ``brb_ms_m`` es el tiempo por metro recorrido en la direccion de
+    avance —el alivio del burden— y ``brs_ms_m`` el tiempo por metro en el
+    sentido transversal, que abre la salida hacia los lados.
+
+    ``angle_deg`` se mide desde la vertical: 90 deja la flecha horizontal, que
+    es lo normal en banco; valores menores la inclinan hacia abajo para que la
+    secuencia progrese tambien en profundidad.
+    """
+
+    origin_x: float = 0.0
+    origin_y: float = 0.0
+    origin_z: float = 0.0
+    azimuth_deg: float = 180.0
+    angle_deg: float = 90.0
+    brb_ms_m: float = 3.0
+    brs_ms_m: float = 0.0
+    length_m: float = 30.0
+
+    # -- geometria ---------------------------------------------------------
+    @property
+    def origin(self) -> np.ndarray:
+        return np.array([self.origin_x, self.origin_y, self.origin_z], float)
+
+    @property
+    def direction(self) -> np.ndarray:
+        """Vector unitario de avance del disparo."""
+        theta = math.radians(self.angle_deg)
+        az = math.radians(self.azimuth_deg)
+        horiz = math.sin(theta)
+        return np.array([horiz * math.sin(az), horiz * math.cos(az),
+                         -math.cos(theta)], float)
+
+    @property
+    def transverse(self) -> np.ndarray:
+        """Unitario horizontal perpendicular al avance, en planta."""
+        az = math.radians(self.azimuth_deg)
+        return np.array([math.cos(az), -math.sin(az), 0.0], float)
+
+    @property
+    def tip(self) -> np.ndarray:
+        return self.origin + self.direction * self.length_m
+
+    @classmethod
+    def from_points(cls, start, end, **kwargs) -> "DirectionVector":
+        """Construye el vector a partir de dos puntos 3D.
+
+        Es lo que usa la colocacion interactiva: el usuario marca de donde sale
+        el disparo y hacia donde avanza, y de ahi salen azimut, angulo y
+        longitud.
+        """
+        a = np.asarray(start, float)
+        b = np.asarray(end, float)
+        d = b - a
+        length = float(np.linalg.norm(d))
+        if length < 1e-9:
+            return cls(origin_x=float(a[0]), origin_y=float(a[1]),
+                       origin_z=float(a[2]), **kwargs)
+        horiz = float(np.linalg.norm(d[:2]))
+        azimuth = math.degrees(math.atan2(d[0], d[1])) % 360.0
+        angle = math.degrees(math.atan2(horiz, -d[2]))
+        return cls(origin_x=float(a[0]), origin_y=float(a[1]), origin_z=float(a[2]),
+                   azimuth_deg=azimuth, angle_deg=angle, length_m=length, **kwargs)
 
 
 @dataclass
@@ -412,6 +493,14 @@ class TimingParams:
     echelon_deg: float = 45.0
     cooperation_window_ms: float = 8.0
 
+    # secuencia electronica
+    mode: str = "Patron de amarre"    # o "Vector de direccion" | "Punto central"
+    detonator: str = "i-kon II"
+    deck_delay_ms: float = 5.0        # entre plataformas del mismo taladro
+    inner_delay_ms: float = 0.0       # entre cebos dentro de una plataforma
+    snap_to_increment: bool = True    # ajustar al incremento programable
+    radial_ms_m: float = 3.0          # ms/m en la salida desde un punto
+
 
 @dataclass
 class SiteConstraints:
@@ -466,9 +555,10 @@ class BlastDesign:
     primer_type: str = "Booster Pentolita 450 g"
     stemming_material: str = "Grava chancada 3/8\""
 
-    # topografia y cara libre
+    # topografia, cara libre y vector de direccion
     topography: Optional[np.ndarray] = None      # (N,3)
     free_face: Optional[np.ndarray] = None       # polilinea (M,2) o (M,3)
+    direction: Optional[DirectionVector] = None
 
     @property
     def n_holes(self) -> int:

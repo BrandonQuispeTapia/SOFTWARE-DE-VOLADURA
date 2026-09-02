@@ -34,7 +34,10 @@ Geometría ─▶ Carga ─▶ Secuencia ─▶ Análisis ─▶ Optimización �
 | **Geometría** | Mallas cuadradas, rectangulares y al tresbolillo con taladros inclinados, orientadas al azimut de la cara libre y apoyadas sobre topografía real. Dimensionamiento automático que promedia Konya-Walter, Langefors-Kihlström, Ash y Pearse. |
 | **Burden real** | Cada taladro recibe su burden geométrico y su **burden de alivio** —la cara efectiva en el instante en que dispara— y un volumen de responsabilidad por teselación de Voronoi, en lugar del clásico B×S×H uniforme. |
 | **Carga** | Columna por plataformas: carga de fondo, columnas múltiples, tacos intermedios, cámara de aire y taco de collar, con acoplamiento variable para voladura controlada. Catálogo de once agentes de voladura comerciales. |
-| **Secuencia** | Cinco patrones de amarre, dispersión real del sistema de iniciación, carga operante máxima por ventana de cooperación (regla de 8 ms) y probabilidad de solape por Monte Carlo. |
+| **Secuencia** | Tres métodos intercambiables: patrón de amarre, **vector de dirección** —se dibuja la flecha y los tiempos salen de BRB y BRS, en ms por metro— y salida radial desde un punto. Cinco patrones de amarre, carga operante por ventana de cooperación (regla de 8 ms) y probabilidad de solape por Monte Carlo. |
+| **Detonadores electrónicos** | Catálogo de once modelos con su rango programable, incremento mínimo y precisión real, que alimenta la dispersión simulada. Los tiempos se ajustan al incremento del modelo y se validan contra sus límites antes de exportarlos. |
+| **Plataformas retardadas** | Retardo entre cargas independientes del mismo taladro y entre cebos de una misma carga. La carga operante se cuenta por carga real, no por taladro: seccionar la columna solo baja la vibración si el cálculo lo reconoce. |
+| **Isócronas y recorrido** | Curvas de igual tiempo de detonación sobre la malla y trazado del orden de salida, para leer de un vistazo por dónde corre y dónde se atasca el disparo. |
 | **Fragmentación** | Kuznetsov-Cunningham para el X50, índice de uniformidad de Cunningham corregido por tiempo de alivio, y curva completa de **Swebrec (KCO)**, que no sobreestima los finos como Rosin-Rammler. |
 | **Vibraciones** | Distancia escalada USBM en campo lejano, Holmberg-Persson en campo cercano para el daño al talud remanente, y **superposición de onda semilla** para predecir el sismograma completo del disparo. Cumplimiento contra USBM RI8507 y DIN 4150-3. |
 | **Onda aérea y proyección** | Sobrepresión con corrección por confinamiento del taco e inversión térmica; alcance de flyrock por Richards & Moore y Lundborg, con distancia segura recomendada. |
@@ -112,6 +115,7 @@ la secuencia de salida se reproduce como animación sobre el visor.
 | Rueda | Acercar y alejar |
 | Botón central, o Shift + izquierdo | Desplazar |
 | Doble clic | Seleccionar el taladro |
+| Dos clics en modo vector | Colocar el vector de dirección |
 | Ctrl + clic · Shift + clic | Agregar a la selección · alternar |
 
 Girar y seleccionar comparten el botón izquierdo: se distingue el clic del

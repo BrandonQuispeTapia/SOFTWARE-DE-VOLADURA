@@ -19,7 +19,9 @@ from xblast.core import timing as timing_mod
 from xblast.core import airblast, vibration
 from xblast.core.analysis import analyze
 from xblast.core.charging import ChargeRule
-from xblast.core.models import BlastDesign, Deck, DeckKind, PatternParams, RockMass
+from xblast.core.models import (
+    BlastDesign, Deck, DeckKind, PatternParams, RockMass, TimingParams,
+)
 
 
 @pytest.fixture
@@ -169,13 +171,30 @@ def test_cooperating_charge_never_exceeds_total(design: BlastDesign):
     assert 0 < coop["mic_kg"] <= design.total_charge_kg + 1e-6
 
 
-def test_electronic_system_has_less_scatter_than_nonel(design: BlastDesign):
-    from xblast.core.models import TimingParams
-    electronic = timing_mod.overlap_probability(
-        design.holes, TimingParams(system="Electronico"))
+def test_electronic_detonator_has_less_scatter_than_nonel(design: BlastDesign):
+    """La dispersion la marca el modelo de detonador, no una etiqueta generica."""
+    params = TimingParams(mode="Vector de direccion")
+    vector = timing_mod.default_vector(design.holes)
+    vector.brs_ms_m = 2.0
+    timing_mod.assign_delays(design.holes, params, 180.0, vector)
+
+    electronico = timing_mod.overlap_probability(
+        design.holes, TimingParams(detonator="i-kon II"))
     nonel = timing_mod.overlap_probability(
-        design.holes, TimingParams(system="Pirotecnico (NONEL)"))
-    assert electronic["scatter_cv_pct"] < nonel["scatter_cv_pct"]
+        design.holes, TimingParams(detonator="NONEL LP (fondo)"))
+    assert electronico["scatter_cv_pct"] < nonel["scatter_cv_pct"]
+    assert electronico["p_out_of_sequence_pct"] < nonel["p_out_of_sequence_pct"]
+
+
+def test_simultaneous_holes_are_not_out_of_sequence(design: BlastDesign):
+    """Los taladros que salen juntos por diseno no pueden invertir su orden."""
+    params = TimingParams(mode="Vector de direccion", detonator="NONEL LP (fondo)")
+    vector = timing_mod.default_vector(design.holes)
+    vector.brs_ms_m = 0.0                    # cada fila entera sale a la vez
+    timing_mod.assign_delays(design.holes, params, 180.0, vector)
+
+    resultado = timing_mod.overlap_probability(design.holes, params)
+    assert resultado["p_out_of_sequence_pct"] == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -378,3 +397,162 @@ def test_manual_edits_survive_a_full_analysis(design: BlastDesign):
     assert hole.charge_kg == pytest.approx(expected)
     assert hole.hole_type == "Precorte"
     assert a.kpis["charge_kg"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Secuencia electronica
+# ---------------------------------------------------------------------------
+
+
+def test_detonator_limits():
+    from xblast.core import detonators as detdb
+
+    det = detdb.get("i-kon II")
+    assert det.electronic
+    assert det.snap(17.4) == pytest.approx(17.0)
+    assert det.snap(17.6) == pytest.approx(18.0)
+    assert det.in_range(0) and det.in_range(det.max_delay_ms)
+    assert not det.in_range(det.max_delay_ms + 1)
+    assert det.on_grid(25.0) and not det.on_grid(25.4)
+    # La dispersion crece con el retardo pero nunca baja del suelo declarado.
+    assert det.scatter_ms(0) == pytest.approx(det.accuracy_floor_ms)
+    assert det.scatter_ms(20000) > det.scatter_ms(100)
+
+
+def test_electronic_beats_pyrotechnic_scatter():
+    from xblast.core import detonators as detdb
+
+    electronico = detdb.get("i-kon II").scatter_ms(500)
+    pirotecnico = detdb.get("NONEL LP (fondo)").scatter_ms(500)
+    assert pirotecnico > electronico * 50
+
+
+def test_direction_vector_geometry():
+    from xblast.core.models import DirectionVector
+
+    v = DirectionVector(azimuth_deg=180.0, angle_deg=90.0)
+    assert v.direction == pytest.approx([0.0, -1.0, 0.0], abs=1e-9)
+    assert v.transverse[2] == pytest.approx(0.0)
+    assert float(v.direction @ v.transverse) == pytest.approx(0.0, abs=1e-9)
+
+    reconstruido = DirectionVector.from_points((0, 0, 0), (0, -30, 0))
+    assert reconstruido.azimuth_deg == pytest.approx(180.0)
+    assert reconstruido.angle_deg == pytest.approx(90.0)
+    assert reconstruido.length_m == pytest.approx(30.0)
+
+
+def test_vector_timing_follows_brb_and_brs(design: BlastDesign):
+    vector = timing_mod.default_vector(design.holes, design.pattern.face_azimuth_deg)
+    vector.brb_ms_m, vector.brs_ms_m = 4.0, 0.0
+    timing_mod.assign_delays_from_vector(design.holes, vector)
+
+    # Con BRS nulo la salida solo depende del avance: cada fila comparte tiempo.
+    por_fila = {h.row: round(h.delay_ms, 1) for h in design.holes}
+    assert len(set(por_fila.values())) == design.pattern.rows
+    assert min(h.delay_ms for h in design.holes) == pytest.approx(0.0)
+
+    duracion_simple = max(h.delay_ms for h in design.holes)
+    vector.brb_ms_m = 8.0
+    timing_mod.assign_delays_from_vector(design.holes, vector)
+    assert max(h.delay_ms for h in design.holes) == pytest.approx(duracion_simple * 2, rel=0.02)
+
+    vector.brb_ms_m, vector.brs_ms_m = 4.0, 3.0
+    timing_mod.assign_delays_from_vector(design.holes, vector)
+    assert len({round(h.delay_ms, 1) for h in design.holes}) > design.pattern.rows
+
+
+def test_radial_timing_grows_with_distance(design: BlastDesign):
+    center = design.holes[0].collar
+    timing_mod.assign_delays_from_point(design.holes, center, ms_per_m=5.0)
+
+    cerca = design.holes[0]
+    lejos = max(design.holes,
+                key=lambda h: float(np.linalg.norm(h.collar[:2] - center[:2])))
+    assert cerca.delay_ms == pytest.approx(0.0)
+    assert lejos.delay_ms > cerca.delay_ms
+
+
+def test_charge_units_merge_contiguous_decks(design: BlastDesign):
+    from xblast.core.charging import charge_units
+
+    hole = design.holes[0]
+    # La carga de fondo y la de columna van pegadas: son una sola carga.
+    assert sum(1 for d in hole.decks if d.is_charge) == 2
+    assert len(charge_units(hole)) == 1
+    assert not hole.is_decked
+    assert charge_units(hole)[0]["mass_kg"] == pytest.approx(hole.charge_kg, rel=1e-9)
+
+    charging.apply_charge(design.holes, ChargeRule(n_decks=2, inter_deck_stem_m=1.5))
+    seccionado = design.holes[0]
+    assert seccionado.is_decked
+    assert len(charge_units(seccionado)) == 2
+
+
+def test_deck_delays_split_the_operating_charge():
+    """Seccionar la columna solo baja la carga operante si cada tramo se retarda."""
+    p = PatternParams(rows=1, cols=1)
+    holes = pattern_mod.generate_pattern(p)
+    charging.apply_charge(holes, ChargeRule(n_decks=2, inter_deck_stem_m=1.5))
+    total = holes[0].charge_kg
+
+    params = TimingParams(mode="Patron de amarre", deck_delay_ms=0.0)
+    timing_mod.assign_delays(holes, params)
+    assert timing_mod.cooperating_charge(holes, 8.0)["mic_kg"] == pytest.approx(total, rel=1e-6)
+
+    params.deck_delay_ms = 50.0
+    timing_mod.assign_delays(holes, params)
+    eventos = timing_mod.charge_events(holes)
+    assert len(eventos) == 2
+    mic = timing_mod.cooperating_charge(holes, 8.0)["mic_kg"]
+    assert mic == pytest.approx(max(e[1] for e in eventos), rel=1e-6)
+    assert mic < total
+
+
+def test_delays_snap_to_the_detonator_increment(design: BlastDesign):
+    from xblast.core import detonators as detdb
+
+    params = TimingParams(mode="Vector de direccion", detonator="i-kon II",
+                          snap_to_increment=True)
+    vector = timing_mod.default_vector(design.holes)
+    vector.brb_ms_m = 3.7
+    timing_mod.assign_delays(design.holes, params, 180.0, vector)
+
+    det = detdb.get("i-kon II")
+    assert all(det.on_grid(h.delay_ms) for h in design.holes)
+
+
+def test_locked_delay_survives_vector_timing(design: BlastDesign):
+    design.holes[4].delay_ms = 777.0
+    design.holes[4].delay_locked = True
+    vector = timing_mod.default_vector(design.holes)
+    timing_mod.assign_delays_from_vector(design.holes, vector)
+    assert design.holes[4].delay_ms == pytest.approx(777.0)
+
+
+def test_sequence_check_flags_an_undersized_detonator(design: BlastDesign):
+    params = TimingParams(mode="Vector de direccion", detonator="HotShot")
+    vector = timing_mod.default_vector(design.holes)
+    vector.brb_ms_m = 2000.0                      # duracion absurda a proposito
+    timing_mod.assign_delays(design.holes, params, 180.0, vector)
+
+    hallazgos = timing_mod.check_sequence(design.holes, params)
+    assert any(f["level"] == "error" and "rango" in f["item"].lower() for f in hallazgos)
+
+
+def test_isochrones_and_firing_path(design: BlastDesign):
+    params = TimingParams(mode="Vector de direccion")
+    vector = timing_mod.default_vector(design.holes)
+    vector.brs_ms_m = 2.0
+    timing_mod.assign_delays(design.holes, params, 180.0, vector)
+
+    curvas = timing_mod.isochrones(design.holes, interval_ms=20.0)
+    assert curvas
+    niveles = [nivel for nivel, _ in curvas]
+    assert niveles == sorted(niveles)
+    assert all(line.shape[1] == 3 for _n, lines in curvas for line in lines)
+
+    # Un intervalo mayor que la duracion no produce ninguna curva.
+    assert timing_mod.isochrones(design.holes, interval_ms=100000.0) == []
+
+    camino = timing_mod.firing_path(design.holes)
+    assert camino.shape == (len(design.holes), 3)

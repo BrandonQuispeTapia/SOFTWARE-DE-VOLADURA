@@ -235,6 +235,42 @@ def energy_profile(hole: Hole, n: int = 120) -> Tuple[np.ndarray, np.ndarray]:
     return s, e
 
 
+def charge_units(hole: Hole) -> List[Dict[str, object]]:
+    """Cargas realmente independientes dentro del taladro.
+
+    Dos plataformas de carga contiguas —la de fondo y la de columna que va
+    encima, por ejemplo— forman una sola carga continua que detona con un
+    unico cebo. Solo un taco o una camara de aire las separa de verdad. Esta
+    funcion agrupa lo contiguo, que es lo que hay que contar para los
+    detonadores, para la carga operante y para el programa de tiempos.
+
+    Returns:
+        Una entrada por carga independiente, del fondo al collar, con su
+        masa, su tramo y las plataformas que la componen.
+    """
+    units: List[Dict[str, object]] = []
+    current: Optional[Dict[str, object]] = None
+
+    for deck in hole.decks:
+        if not deck.is_charge:
+            current = None                     # taco o aire: corta la columna
+            continue
+        exp = exdb.get(deck.explosive)
+        mass = exp.linear_density_kg_m(hole.diameter_mm, deck.coupling) * deck.length_m
+        if current is None:
+            current = {"decks": [deck], "mass_kg": mass,
+                       "from_toe_m": deck.from_toe_m, "length_m": deck.length_m,
+                       "primers": deck.primers, "delay_ms": deck.delay_ms,
+                       "explosive": deck.explosive}
+            units.append(current)
+        else:
+            current["decks"].append(deck)
+            current["mass_kg"] = float(current["mass_kg"]) + mass
+            current["length_m"] = float(current["length_m"]) + deck.length_m
+            current["primers"] = int(current["primers"]) + deck.primers
+    return units
+
+
 def charge_summary(hole: Hole) -> Dict[str, float]:
     """Resumen numerico de la carga del taladro."""
     exps: Dict[str, float] = {}

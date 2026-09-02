@@ -137,24 +137,95 @@ en el resumen del taladro tipo.
 
 ## 6. Secuencia de salida
 
-**Secuencia.**
+**Secuencia.** Hay tres formas de repartir los tiempos, y se eligen arriba del
+panel.
 
-1. Elija el sistema de iniciación. El electrónico tiene una dispersión de
-   0.02 % frente al 3 % del pirotécnico: la diferencia se nota en la
-   probabilidad de solape.
-2. Seleccione el patrón de amarre y los retardos.
-3. El bloque **Verificación temporal** muestra el alivio en ms por metro. Los
-   valores deben quedar en verde: 3–6 ms/m entre taladros y 10–30 ms/m entre
-   filas.
-4. El gráfico muestra la carga detonada por ventana de cooperación con la
-   línea de la carga máxima admisible para el límite de PPV declarado. Ninguna
-   barra debería superarla.
+### Vector de dirección
 
-**Animar secuencia** (`F8`) reproduce el disparo sobre el visor 3D.
+Es el método habitual con detonadores electrónicos y el más rápido de ajustar.
+Se dibuja una flecha sobre la malla: dónde arranca el disparo y hacia dónde
+avanza. El tiempo de cada taladro sale de su posición respecto de esa flecha.
+
+**Colocarlo lleva dos clics.** Pulse **Colocar en el visor** (o `F9`), haga clic
+en el punto de arranque y otro hacia donde avanza el disparo; entre ambos verá
+la flecha siguiendo al cursor. `Esc` cancela.
+
+Si no quiere dibujarla, **Automático** la deduce de la cara libre y del tamaño
+de la malla, ya centrada y con la longitud justa. **Invertir sentido** hace que
+la voladura salga por el lado contrario sin volver a trazarla. Azimut, ángulo y
+longitud también se pueden escribir a mano.
+
+| Parámetro | Qué hace |
+| --- | --- |
+| **BRB** | Milisegundos por metro **en la dirección de avance**: el alivio del burden. El rango habitual es 3 a 6 ms/m. Subirlo alarga el disparo y da más tiempo a que la roca se mueva. |
+| **BRS** | Milisegundos por metro **en el sentido transversal**. En cero, cada fila sale entera a la vez; al subirlo la salida se abre en abanico y baja la carga operante. |
+| **Ángulo** | Medido desde la vertical. 90° deja la flecha horizontal, que es lo normal en banco; por debajo, la secuencia progresa también en profundidad. |
+
+### Patrón de amarre
+
+El método clásico: retardo entre taladros de una fila y entre filas, con cinco
+geometrías de propagación (fila por fila, V, echelon, eco y punto central).
+
+### Punto central
+
+La salida se abre radialmente desde un punto, a tantos milisegundos por metro.
+Se coloca igual, con un clic sobre el visor.
 
 ---
 
-## 7. Entorno y límites
+## 7. Detonadores y plataformas
+
+### Modelo de detonador
+
+El modelo elegido no es un dato administrativo: fija el rango de tiempos
+programables, el incremento mínimo y **la precisión real del disparo**. Entre un
+electrónico de 0.005 % y un pirotécnico de 3 % hay dos órdenes de magnitud, y de
+ahí sale la probabilidad de solape que se ve más abajo en el mismo panel.
+
+Con **Ajustar los tiempos al incremento programable** activo, los retardos se
+redondean a lo que el detonador sabe programar; así lo que se ve en pantalla es
+lo que va a ocurrir en el terreno.
+
+### Retardo entre plataformas
+
+Seccionar la columna solo baja la vibración si cada tramo sale en un instante
+distinto. **Entre plataformas** separa las cargas independientes del mismo
+taladro, del fondo al collar; **entre cebos** separa los cebos de una misma
+carga.
+
+> Cuentan como cargas independientes las que están separadas por un taco o una
+> cámara de aire. La carga de fondo y la columna que va encima son continuas:
+> llevan un solo cebo y detonan juntas, así que el programa las trata como una.
+
+### Comprobar antes de disparar
+
+**Comprobar secuencia** valida el programa contra el detonador: tiempos fuera de
+rango, valores que no se pueden programar, unidades por encima del máximo del
+sistema, taladros con carga y sin cebo, y grupos que salen simultáneos sumando
+su carga operante.
+
+**Exportar a máquina** escribe el CSV con un detonador por carga independiente
+—posición, identificador, tiempo, coordenadas, masa y producto— con la cabecera
+del modelo y sus límites.
+
+---
+
+## 8. Simular el disparo
+
+El panel de secuencia muestra la carga detonada por ventana de cooperación con
+la línea de la carga máxima admisible para el límite de PPV declarado. Ninguna
+barra debería superarla.
+
+| Control | Para qué sirve |
+| --- | --- |
+| **Animar secuencia** (`F8`) | Reproduce el disparo sobre el visor 3D. |
+| **Velocidad** | De 0.05x a 5x. Por debajo de 1x se ve en cámara lenta, que es como se aprecia el orden de salida. |
+| **Isócronas** | Curvas de igual tiempo sobre la malla, cada N milisegundos. Donde se aprietan, la salida es lenta y el burden queda confinado; donde se abren, la voladura corre. |
+| **Recorrido del disparo** | Une los collares en orden de salida: se ve de un vistazo si el amarre hace lo que se pretendía. |
+
+---
+
+## 9. Entorno y límites
 
 **Diseño ▸ Entorno.**
 
@@ -168,7 +239,7 @@ en el resumen del taladro tipo.
 
 ---
 
-## 8. Analizar
+## 10. Analizar
 
 Pulse **Analizar** (`F6`). El cálculo corre en segundo plano.
 
@@ -195,7 +266,7 @@ Desglose por concepto y reparto entre perforación-voladura y aguas abajo.
 
 ---
 
-## 9. Tematizar el visor
+## 11. Tematizar el visor
 
 El desplegable **Tematizar por** de la barra de herramientas colorea la malla
 según la variable elegida:
@@ -214,7 +285,7 @@ zonas frías son las que dejarán bolones y lomos.
 
 ---
 
-## 10. Intervenir taladro por taladro
+## 12. Intervenir taladro por taladro
 
 El panel **Propiedades** no es una ficha de consulta: es donde se edita el
 taladro. Se abre al hacer clic sobre uno en el visor, en la tabla o en el
@@ -279,7 +350,7 @@ propiedades: lo que se marca en uno se refleja en los otros.
 
 ---
 
-## 11. Optimizar
+## 13. Optimizar
 
 **Optimización** (`F7`) explora variaciones de burden y relación S/B alrededor
 del diseño actual, manteniendo constante el área volada para que la
@@ -299,7 +370,7 @@ regenera la malla.
 
 ---
 
-## 12. Importar datos reales
+## 14. Importar datos reales
 
 ### Taladros
 **Importar taladros** (`Ctrl+I`) acepta tanto un CSV de collares
@@ -317,18 +388,19 @@ El formato completo está en [FORMATO_DATOS.md](FORMATO_DATOS.md).
 
 ---
 
-## 13. Entregables
+## 15. Entregables
 
 | Acción | Resultado |
 | --- | --- |
 | **Reporte técnico** (`Ctrl+R`) | Documento HTML autocontenido con la memoria de cálculo completa, gráficos incrustados y el detalle de todos los taladros. Ábralo en el navegador e imprima a PDF. |
 | **Exportar taladros** | CSV con coordenadas, carga, retardo, burden y factor de potencia por taladro, listo para el área de operaciones. |
+| **Exportar a máquina** | Programa de tiempos con un detonador por carga independiente, para cargar en el sistema electrónico. |
 | **Captura del visor** | PNG de la vista 3D actual. |
 | **Guardar proyecto** (`Ctrl+S`) | Archivo `.xbp` con todo el diseño, incluida la topografía. |
 
 ---
 
-## 14. Personalizar el programa
+## 16. Personalizar el programa
 
 **Ver > Preferencias**, o `Ctrl+,`. Son 229 opciones repartidas en 17
 categorías, con buscador arriba a la izquierda: escriba «burden», «clic» o
@@ -369,7 +441,7 @@ difiere del valor por defecto, así que el archivo se mantiene legible.
 
 ---
 
-## 15. Antes de usarlo en producción
+## 17. Antes de usarlo en producción
 
 Los modelos son predictivos y traen constantes genéricas. Calíbrelos con datos
 de su yacimiento:
@@ -400,6 +472,7 @@ de su yacimiento:
 | `Ctrl+I` | Importar taladros |
 | `Ctrl+R` | Reporte técnico |
 | `Ctrl+Alt+1` … `Ctrl+Alt+9` | Mostrar u ocultar cada panel |
+| `F9` | Colocar el vector de dirección |
 | `Ctrl+,` | Preferencias |
 | `Ctrl+A` · `Ctrl+D` · `Ctrl+Shift+I` | Seleccionar todo · quitar selección · invertir |
 | `B` | Selección por ventana |

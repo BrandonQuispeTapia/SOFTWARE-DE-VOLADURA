@@ -171,6 +171,8 @@ def _clone_design(design: BlastDesign, p: PatternParams) -> BlastDesign:
         primer_type=design.primer_type,
         stemming_material=design.stemming_material,
     )
+    # El vector se regenera para cada escenario: la malla cambia de tamano.
+    d.direction = None
     return d
 
 

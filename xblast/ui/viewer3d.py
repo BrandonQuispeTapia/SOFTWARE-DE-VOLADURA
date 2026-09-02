@@ -39,7 +39,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from ..core.models import HOLE_TYPE_COLORS, Hole
+from ..core.models import HOLE_TYPE_COLORS, DirectionVector, Hole
 from .settings import Settings, settings as global_settings
 from .theme import C
 
@@ -87,6 +87,12 @@ _LABEL_BUILDERS: Dict[str, Callable[[Hole], str]] = {
     "Carga": lambda h: f"{h.charge_kg:,.0f} kg",
     "Identificador y retardo": lambda h: f"{h.hid}  {h.delay_ms:,.0f} ms",
 }
+
+#: Proporciones de la flecha del vector de direccion. En PyVista los radios son
+#: fracciones del largo unitario, asi que la escala los multiplica junto con el
+#: resto: darlos en metros produce una flecha desproporcionada.
+_ARROW_SHAPE = {"tip_length": 0.16, "tip_radius": 0.035, "shaft_radius": 0.012,
+                "tip_resolution": 24, "shaft_resolution": 24}
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +171,8 @@ class Viewer3D(QObject):
     animation_finished = Signal()
     status_message = Signal(str)
     scene_rebuild_requested = Signal()
+    direction_vector_placed = Signal(object)   # DirectionVector
+    placement_changed = Signal(bool)
 
     def __init__(self, parent=None, store: Optional[Settings] = None):
         super().__init__(parent)
@@ -192,6 +200,11 @@ class Viewer3D(QObject):
         self._last_click_time = 0.0
         self._last_click_pos: Tuple[int, int] = (0, 0)
         self._last_select_time = 0.0
+
+        # colocacion interactiva del vector de direccion
+        self._placement_stage = 0          # 0 inactivo, 1 origen, 2 punta
+        self._placement_origin: Optional[np.ndarray] = None
+        self._placement_observer = None
 
         # animaciones
         self._timer = QTimer(self)
@@ -580,13 +593,22 @@ class Viewer3D(QObject):
             "3": lambda: self.view_side("north"),
             "4": lambda: self.view_side("east"),
             "p": self.toggle_parallel_projection,
-            "Escape": self.clear_selection,
+            "Escape": self._on_escape,
         }
         for key, fn in bindings.items():
             try:
                 self.plotter.add_key_event(key, fn)
             except Exception:
                 pass
+
+    def _on_escape(self) -> None:
+        """Escape cancela lo que este en curso antes de vaciar la seleccion."""
+        if self._placement_stage > 0:
+            self.cancel_vector_placement()
+        elif self.is_box_selection():
+            self.set_box_selection(False)
+        else:
+            self.clear_selection()
 
     # -- restriccion de tornamesa -----------------------------------------
     def _constrain_camera(self, *_args) -> None:
@@ -881,6 +903,11 @@ class Viewer3D(QObject):
             self._last_click_time = 0.0
             return
 
+        # Colocar el vector manda sobre seleccionar, y basta un clic.
+        if self._placement_stage > 0:
+            self._handle_placement_click(x, y)
+            return
+
         now = time.monotonic()
         gap_ms = (now - self._last_click_time) * 1000.0
         near = (abs(x - self._last_click_pos[0]) <= tolerance * 2
@@ -1086,6 +1113,217 @@ class Viewer3D(QObject):
                     found.append(h.hid)
                     break
         return found
+
+    # ------------------------------------------------------------------
+    # Vector de direccion
+    # ------------------------------------------------------------------
+    def show_direction_vector(self, vector: Optional[DirectionVector]) -> None:
+        """Dibuja la flecha que marca hacia donde avanza el disparo."""
+        self.hide_direction_vector()
+        if vector is None or not self._holes:
+            return
+
+        color = str(self.cfg.get("holes.selection_color"))
+        scale = max(vector.length_m, 1.0)
+        try:
+            arrow = pv.Arrow(start=vector.origin, direction=vector.direction,
+                             **_ARROW_SHAPE, scale=scale)
+        except Exception:
+            return
+        self._actors["vector"] = self.plotter.add_mesh(
+            arrow, color=color, name="direction_vector", pickable=False,
+            smooth_shading=bool(self.cfg.get("viewer.smooth_shading")))
+
+        # Marca del origen: es el punto que fija el cero de la secuencia.
+        self._actors["vector_origin"] = self.plotter.add_mesh(
+            pv.Sphere(radius=scale * 0.022, center=vector.origin), color=color,
+            name="direction_origin", pickable=False)
+        self.plotter.render()
+
+    def hide_direction_vector(self) -> None:
+        for key in ("vector", "vector_origin", "vector_preview"):
+            if self._actors.get(key) is not None:
+                self.plotter.remove_actor(self._actors[key], render=False)
+                self._actors[key] = None
+
+    # -- colocacion interactiva -------------------------------------------
+    def start_vector_placement(self) -> None:
+        """Activa la colocacion del vector con dos clics sobre el visor.
+
+        El primero fija de donde arranca la voladura y el segundo hacia donde
+        avanza; entre ambos se dibuja una flecha que sigue al cursor. Los puntos
+        se resuelven sobre el plano de los collares, que es donde el usuario
+        esta viendo la malla.
+        """
+        if not self._holes:
+            return
+        self._placement_stage = 1
+        self._placement_origin = None
+        self.widget.setCursor(Qt.CursorShape.CrossCursor)
+        self._attach_placement_preview()
+        self.placement_changed.emit(True)
+        self.status_message.emit(
+            "Vector de direccion: haga clic donde arranca el disparo, "
+            "luego hacia donde avanza. Esc cancela.")
+
+    def cancel_vector_placement(self) -> None:
+        if self._placement_stage == 0:
+            return
+        self._placement_stage = 0
+        self._placement_origin = None
+        self.widget.unsetCursor()
+        if self._actors.get("vector_preview") is not None:
+            self.plotter.remove_actor(self._actors["vector_preview"], render=False)
+            self._actors["vector_preview"] = None
+        self.placement_changed.emit(False)
+        self.status_message.emit("Colocacion del vector cancelada")
+        self.plotter.render()
+
+    def is_placing_vector(self) -> bool:
+        return self._placement_stage > 0
+
+    def _attach_placement_preview(self) -> None:
+        if self._placement_observer is not None:
+            return
+        iren = self._interactor()
+        if iren is None:
+            return
+        self._placement_observer = iren.AddObserver(
+            "MouseMoveEvent", self._on_placement_move, 12.0)
+
+    def _on_placement_move(self, _obj=None, _event=None) -> None:
+        """Flecha provisional que sigue al cursor mientras se coloca."""
+        if self._placement_stage != 2 or self._placement_origin is None:
+            return
+        iren = self._interactor()
+        if iren is None:
+            return
+        point = self._screen_to_bench(*iren.GetEventPosition())
+        if point is None:
+            return
+        span = float(np.linalg.norm(point - self._placement_origin))
+        if span < 0.5:
+            return
+
+        if self._actors.get("vector_preview") is not None:
+            self.plotter.remove_actor(self._actors["vector_preview"], render=False)
+        try:
+            arrow = pv.Arrow(start=self._placement_origin,
+                             direction=point - self._placement_origin,
+                             **_ARROW_SHAPE, scale=span)
+        except Exception:
+            return
+        self._actors["vector_preview"] = self.plotter.add_mesh(
+            arrow, color=str(self.cfg.get("holes.selection_color")), opacity=0.55,
+            name="vector_preview", pickable=False)
+        self.plotter.render()
+
+    def _handle_placement_click(self, x: int, y: int) -> bool:
+        """Consume el clic cuando se esta colocando el vector."""
+        point = self._screen_to_bench(x, y)
+        if point is None:
+            return True
+
+        if self._placement_stage == 1:
+            self._placement_origin = point
+            self._placement_stage = 2
+            self.status_message.emit(
+                "Origen fijado. Ahora marque hacia donde avanza el disparo.")
+            return True
+
+        origin = self._placement_origin
+        self.cancel_vector_placement()
+        if origin is None or float(np.linalg.norm(point - origin)) < 1.0:
+            self.status_message.emit("Vector demasiado corto; vuelva a intentarlo.")
+            return True
+        self.direction_vector_placed.emit(DirectionVector.from_points(origin, point))
+        return True
+
+    def _screen_to_bench(self, x: int, y: int) -> Optional[np.ndarray]:
+        """Punto del plano de los collares que corresponde a un pixel.
+
+        Se lanza el rayo de la camara a traves del pixel y se corta contra el
+        plano horizontal de la malla; asi el usuario puede marcar tambien sobre
+        zona vacia, fuera de los taladros.
+        """
+        if not self._holes:
+            return None
+        renderer = self.plotter.renderer
+        near, far = [], []
+        for depth, target in ((0.0, near), (1.0, far)):
+            renderer.SetDisplayPoint(float(x), float(y), depth)
+            renderer.DisplayToWorld()
+            w = renderer.GetWorldPoint()
+            scale = w[3] if abs(w[3]) > 1e-12 else 1.0
+            target.extend([w[0] / scale, w[1] / scale, w[2] / scale])
+
+        p0 = np.array(near, float)
+        p1 = np.array(far, float)
+        z_plane = float(np.mean([h.collar_z for h in self._holes]))
+        dz = p1[2] - p0[2]
+        if abs(dz) < 1e-9:               # camara mirando en horizontal
+            return None
+        t = (z_plane - p0[2]) / dz
+        if not -0.5 <= t <= 1.5:
+            return None
+        return p0 + t * (p1 - p0)
+
+    # ------------------------------------------------------------------
+    # Isocronas y recorrido del disparo
+    # ------------------------------------------------------------------
+    def show_isochrones(self, curves, show_labels: bool = True) -> None:
+        """Dibuja las curvas de igual tiempo de detonacion."""
+        self.hide_isochrones()
+        if not curves:
+            return
+
+        blocks, labels, positions = [], [], []
+        for level, polylines in curves:
+            for line in polylines:
+                if len(line) >= 2:
+                    blocks.append(pv.lines_from_points(np.asarray(line, float)))
+            if polylines and show_labels:
+                longest = max(polylines, key=len)
+                positions.append(longest[len(longest) // 2])
+                labels.append(f"{level:,.0f} ms")
+        if not blocks:
+            return
+
+        merged = blocks[0].copy()
+        for b in blocks[1:]:
+            merged = merged.merge(b)
+        self._actors["isochrones"] = self.plotter.add_mesh(
+            merged, color=C["accent"], line_width=2, name="isochrones",
+            pickable=False)
+        if labels:
+            self._actors["isochrone_labels"] = self.plotter.add_point_labels(
+                np.array(positions, float), labels, font_size=10,
+                text_color=C["accent"], shape=None, always_visible=True,
+                point_size=1, name="isochrone_labels", bold=False)
+        self.plotter.render()
+
+    def hide_isochrones(self) -> None:
+        for key in ("isochrones", "isochrone_labels"):
+            if self._actors.get(key) is not None:
+                self.plotter.remove_actor(self._actors[key], render=False)
+                self._actors[key] = None
+
+    def show_firing_path(self, points) -> None:
+        """Traza el recorrido del disparo uniendo los collares por orden de salida."""
+        self.hide_firing_path()
+        points = np.asarray(points, float)
+        if len(points) < 2:
+            return
+        offset = points + np.array([0.0, 0.0, 0.8])
+        self._actors["path"] = self.plotter.add_mesh(
+            pv.lines_from_points(offset), color=C["ok"], line_width=2,
+            name="firing_path", pickable=False)
+        self.plotter.render()
+
+    def hide_firing_path(self) -> None:
+        if self._actors.get("path") is not None:
+            self.plotter.remove_actor(self._actors["path"], render=False)
+            self._actors["path"] = None
 
     # ------------------------------------------------------------------
     # Animacion de la secuencia
